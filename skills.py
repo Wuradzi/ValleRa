@@ -671,4 +671,20 @@ def get_custom_knowledge(text):
             except:
                 pass
 
+
     return found_info
+
+def look_at_screen(text=None):
+    """
+    Робить скріншот і зберігає його для аналізу ШІ.
+    """
+    filename = "vision_buffer.png"
+    print("📸 Роблю знімок для аналізу...")
+    
+    try:
+        screenshot = pyautogui.screenshot()
+        screenshot.save(filename)
+        return filename 
+    except Exception as e:
+        print(f"Помилка скріншоту: {e}")
+        return None

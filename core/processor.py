@@ -86,6 +86,14 @@ class CommandProcessor:
                 skills.turn_off_pc()
             elif tag == "youtube":
                 skills.search_youtube_clip(user_text)
+            elif tag == "vision":
+                image_path = skills.look_at_screen()
+                if image_path:
+                    self.voice.say("Зараз гляну...")
+                    vision_response = self.brain.see(image_path, user_text)
+                    self.voice.say(vision_response)
+                else:
+                    self.voice.say("Не можу зробити скріншот.")
             else:
                 print(f"⚠️ Невідомий AI тег: {tag}")
         except Exception as e:
