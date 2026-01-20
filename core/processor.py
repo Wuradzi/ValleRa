@@ -59,7 +59,6 @@ class CommandProcessor:
                 if ratio > best_ratio:
                     best_ratio = ratio
                     best_func = func
-
         
         if best_ratio >= THRESHOLD:
             return best_func
@@ -67,35 +66,56 @@ class CommandProcessor:
 
     def _execute_ai_command(self, tag, user_text):
         """
-        Виконує команду на основі тегу, який повернула Gemma.
+        Виконує команду на основі тегу.
+        Тепер ми озвучуємо результат виконання (return) функції,
+        замість балаканини Gemma.
         """
         print(f"🔧 AI виконує команду: {tag}")
         try:
+            response = None
+
             if tag == "browser":
-                skills.search_google(user_text)
+                # search_google повертає рядок "Шукаю..."
+                response = skills.search_google(user_text)
+            
             elif tag == "steam":
-                skills.open_program("steam")
+                # open_program повертає "Запускаю steam..."
+                response = skills.open_program("steam")
+            
             elif tag == "telegram":
-                skills.open_program("telegram")
+                response = skills.open_program("telegram")
+            
             elif tag == "weather":
-                res = skills.check_weather(user_text)
-                self.voice.say(res)
+                # Тут повертається повний прогноз
+                response = skills.check_weather(user_text)
+            
             elif tag == "time":
-                self.voice.say(skills.get_time()) 
+                response = skills.get_time()
+            
             elif tag == "shutdown":
-                skills.turn_off_pc()
+                response = skills.turn_off_pc()
+
             elif tag == "youtube":
-                skills.search_youtube_clip(user_text)
+                response = skills.search_youtube_clip(user_text)
+            
             elif tag == "vision":
                 image_path = skills.look_at_screen()
                 if image_path:
-                    self.voice.say("Зараз гляну...")
+                    self.voice.say("Секунду, дивлюсь...")
+                    # Vision повертає опис, тому тут ми його кажемо
                     vision_response = self.brain.see(image_path, user_text)
                     self.voice.say(vision_response)
+                    return # Виходимо, бо ми вже сказали все, що треба
                 else:
-                    self.voice.say("Не можу зробити скріншот.")
+                    response = "Не можу зробити скріншот."
+
             else:
                 print(f"⚠️ Невідомий AI тег: {tag}")
+            
+            # Якщо функція повернула текстову відповідь (статус) — озвучуємо її
+            if response:
+                self.voice.say(response)
+
         except Exception as e:
             print(f"❌ Помилка виконання AI команди: {e}")
 
@@ -107,6 +127,7 @@ class CommandProcessor:
 
         clean_text = text.lower().replace("валера", "").replace("валєра", "").strip()
         
+        # 1. Швидкий пошук "Розкажи про..."
         search_triggers = ["розкажи про", "хто такий", "що таке", "знайди інфу"]
         if any(clean_text.startswith(tr) for tr in search_triggers):
             print("🕵️ Пошук в інтернеті...")
@@ -120,8 +141,8 @@ class CommandProcessor:
                     return
             except: pass
 
+        # 2. Fuzzy Match (Старі добрі жорсткі команди)
         command_func = self._find_best_match(clean_text)
-        
         if command_func:
             print("⚡ Виконую команду (Fuzzy)...")
             try:
@@ -137,38 +158,43 @@ class CommandProcessor:
                 self.voice.say(response)
             return
 
-        # 4. ПЕРЕВІРКА НА НАЗВУ ПРОГРАМИ ("Валєра, Телеграм")
+        # 3. Запуск програм за назвою
         if skills.is_app_name(clean_text):
             print(f"🚀 Це програма! Запускаю: {clean_text}")
             self.voice.say(f"Запускаю {clean_text}.")
             skills.open_program(clean_text) 
             return
 
-        # 5. NEURO-STYLE: АНАЛІЗ НАМІРІВ ЧЕРЕЗ GEMMA
+        # 4. NEURO-STYLE: АНАЛІЗ ЧЕРЕЗ GEMMA
         print("🧠 Аналізую наміри через Gemma...")
+        
+        # Перевірка бази знань (RAG)
         custom_info = skills.get_custom_knowledge(clean_text)
         if custom_info:
             print(f"📚 Знайшов додаткову інфу в базі!")
+
         try:
-            ai_response = self.brain.think(clean_text)
+            # Думаємо...
+            if custom_info:
+                ai_response = self.brain.think(clean_text, context_data=custom_info)
+            else:
+                ai_response = self.brain.think(clean_text)
             
             # Шукаємо тег [CMD: ...]
             match = re.search(r"\[CMD:\s*(\w+)\]", ai_response)
             
             if match:
-                command_tag = match.group(1) # "steam", "weather" і т.д.
+                command_tag = match.group(1) # "steam", "weather", "vision"
                 
-                # Прибираємо тег з тексту, щоб він його не читав
-                spoken_text = ai_response.replace(match.group(0), "").strip()
+                # 🔥 ГОЛОВНА ЗМІНА:
+                # Якщо ми знайшли команду — ми ІГНОРУЄМО все, що там набазікала Gemma.
+                # Ми не кажемо spoken_text. Ми просто виконуємо дію.
                 
-                # Спочатку кажемо текст (реакцію)
-                if spoken_text:
-                    self.voice.say(spoken_text)
-                
-                # Потім виконуємо дію
+                # Виконуємо дію (і вона сама озвучить свій статус, якщо треба)
                 self._execute_ai_command(command_tag, clean_text)
                 
             else:
+                # Тегу немає — значить це просто розмова, кажемо все як є
                 if ai_response:
                     self.voice.say(ai_response)
                 else:
