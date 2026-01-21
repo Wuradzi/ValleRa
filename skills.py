@@ -79,7 +79,7 @@ def recall_data(text):
     found_keys = []
     
     for key, value in db.items():
-        if key in text.lower():
+        if key.lower() in text.lower():
             found_keys.append(f"{key}: {value}")
             
     if found_keys:
@@ -101,7 +101,7 @@ def forget_data(text):
     deleted = []
     
     for key in list(db.keys()):
-        if key in text.lower():
+        if key.lower() in text.lower():
             del db[key]
             deleted.append(key)
             

@@ -2,6 +2,7 @@ import skills
 from core.ai_brain import AIBrain
 from thefuzz import fuzz
 import re
+import config
 
 class CommandProcessor:
     def __init__(self, voice_engine, listener):
@@ -59,6 +60,7 @@ class CommandProcessor:
                 if ratio > best_ratio:
                     best_ratio = ratio
                     best_func = func
+
         
         if best_ratio >= THRESHOLD:
             return best_func
@@ -66,56 +68,39 @@ class CommandProcessor:
 
     def _execute_ai_command(self, tag, user_text):
         """
-        Виконує команду на основі тегу.
-        Тепер ми озвучуємо результат виконання (return) функції,
-        замість балаканини Gemma.
+        Виконує команду на основі тегу, який повернула Gemma.
         """
         print(f"🔧 AI виконує команду: {tag}")
         try:
-            response = None
-
             if tag == "browser":
-                # search_google повертає рядок "Шукаю..."
-                response = skills.search_google(user_text)
-            
+                skills.search_google(user_text)
             elif tag == "steam":
-                # open_program повертає "Запускаю steam..."
-                response = skills.open_program("steam")
-            
+                skills.open_program("steam")
             elif tag == "telegram":
-                response = skills.open_program("telegram")
-            
+                skills.open_program("telegram")
             elif tag == "weather":
-                # Тут повертається повний прогноз
-                response = skills.check_weather(user_text)
-            
+                res = skills.check_weather(user_text)
+                self.voice.say(res)
             elif tag == "time":
-                response = skills.get_time()
-            
+                self.voice.say(skills.get_time()) 
             elif tag == "shutdown":
-                response = skills.turn_off_pc()
-
+                skills.turn_off_pc()
             elif tag == "youtube":
-                response = skills.search_youtube_clip(user_text)
-            
+                skills.search_youtube_clip(user_text)
             elif tag == "vision":
-                image_path = skills.look_at_screen()
-                if image_path:
-                    self.voice.say("Секунду, дивлюсь...")
-                    # Vision повертає опис, тому тут ми його кажемо
-                    vision_response = self.brain.see(image_path, user_text)
-                    self.voice.say(vision_response)
-                    return # Виходимо, бо ми вже сказали все, що треба
+                if config.LOW_RESOURCE_MODE and config.DISABLE_VISION_LOW_MODE:
+                    self.voice.say("Візія відключена в низькому режимі для економії ресурсів.")
                 else:
-                    response = "Не можу зробити скріншот."
-
+                    image_path = skills.look_at_screen()
+                    if image_path:
+                        self.voice.say("Зараз гляну...")
+                        # Передаємо скріншот у мозок (Gemini 2.5)
+                        vision_response = self.brain.see(image_path, user_text)
+                        self.voice.say(vision_response)
+                    else:
+                        self.voice.say("Не можу зробити скріншот.")
             else:
                 print(f"⚠️ Невідомий AI тег: {tag}")
-            
-            # Якщо функція повернула текстову відповідь (статус) — озвучуємо її
-            if response:
-                self.voice.say(response)
-
         except Exception as e:
             print(f"❌ Помилка виконання AI команди: {e}")
 
@@ -127,7 +112,6 @@ class CommandProcessor:
 
         clean_text = text.lower().replace("валера", "").replace("валєра", "").strip()
         
-        # 1. Швидкий пошук "Розкажи про..."
         search_triggers = ["розкажи про", "хто такий", "що таке", "знайди інфу"]
         if any(clean_text.startswith(tr) for tr in search_triggers):
             print("🕵️ Пошук в інтернеті...")
@@ -141,8 +125,8 @@ class CommandProcessor:
                     return
             except: pass
 
-        # 2. Fuzzy Match (Старі добрі жорсткі команди)
         command_func = self._find_best_match(clean_text)
+        
         if command_func:
             print("⚡ Виконую команду (Fuzzy)...")
             try:
@@ -158,43 +142,41 @@ class CommandProcessor:
                 self.voice.say(response)
             return
 
-        # 3. Запуск програм за назвою
+        # 4. ПЕРЕВІРКА НА НАЗВУ ПРОГРАМИ ("Валєра, Телеграм")
         if skills.is_app_name(clean_text):
             print(f"🚀 Це програма! Запускаю: {clean_text}")
             self.voice.say(f"Запускаю {clean_text}.")
             skills.open_program(clean_text) 
             return
 
-        # 4. NEURO-STYLE: АНАЛІЗ ЧЕРЕЗ GEMMA
+        # 5. NEURO-STYLE: АНАЛІЗ НАМІРІВ ЧЕРЕЗ GEMMA
         print("🧠 Аналізую наміри через Gemma...")
-        
-        # Перевірка бази знань (RAG)
         custom_info = skills.get_custom_knowledge(clean_text)
         if custom_info:
             print(f"📚 Знайшов додаткову інфу в базі!")
-
         try:
-            # Думаємо...
-            if custom_info:
-                ai_response = self.brain.think(clean_text, context_data=custom_info)
-            else:
-                ai_response = self.brain.think(clean_text)
+            ai_response = self.brain.think(clean_text)
             
             # Шукаємо тег [CMD: ...]
             match = re.search(r"\[CMD:\s*(\w+)\]", ai_response)
             
             if match:
-                command_tag = match.group(1) # "steam", "weather", "vision"
+                command_tag = match.group(1) # "steam", "weather" і т.д.
                 
-                # 🔥 ГОЛОВНА ЗМІНА:
-                # Якщо ми знайшли команду — ми ІГНОРУЄМО все, що там набазікала Gemma.
-                # Ми не кажемо spoken_text. Ми просто виконуємо дію.
+                # Прибираємо тег з тексту, щоб він його не читав
+                spoken_text = ai_response.replace(match.group(0), "").strip()
                 
-                # Виконуємо дію (і вона сама озвучить свій статус, якщо треба)
+                # Список команд, які виконуються тихо (без попереднього тексту)
+                silent_commands = ["vision", "time", "weather", "shutdown", "steam", "telegram", "youtube"]
+                
+                # Спочатку кажемо текст (реакцію), якщо не тиха команда
+                if spoken_text and command_tag not in silent_commands:
+                    self.voice.say(spoken_text)
+                
+                # Потім виконуємо дію
                 self._execute_ai_command(command_tag, clean_text)
                 
             else:
-                # Тегу немає — значить це просто розмова, кажемо все як є
                 if ai_response:
                     self.voice.say(ai_response)
                 else:

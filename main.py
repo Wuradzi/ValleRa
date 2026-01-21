@@ -15,6 +15,10 @@ CONVERSATION_TIMEOUT = 30
 def main():
     print(Fore.CYAN + "=======================================")
     print(Fore.CYAN + f"🚀 {config.NAME} (Neuro-Core) Запущено")
+    if config.LOW_RESOURCE_MODE:
+        print(Fore.YELLOW + "⚡ Режим низьких ресурсів: легкі моделі, обмежені функції")
+    else:
+        print(Fore.GREEN + "💪 Повний режим: всі функції доступні")
     print(Fore.CYAN + "=======================================")
 
     listener = Listener()
@@ -45,19 +49,14 @@ def main():
                 text = user_input.lower()
                 triggers = ["валера", "валєра", "валерчик", "valera", "бот"]
                 
-                # Перевірка тригера
                 has_trigger = any(trigger in text for trigger in triggers)
                 
-                # Логіка входу
                 if has_trigger or is_active_dialog:
                     print(Fore.WHITE + f"🗣️ Почув: {user_input}")
                     print(Fore.GREEN + "⚡ Обробка...")
 
-                    # 1. Виконуємо команду (говоримо, думаємо, відкриваємо)
                     brain.process(text)
                     
-                    # 2. ТІЛЬКИ ТЕПЕР оновлюємо таймер
-                    # Ми даємо юзеру 30 секунд тиші ПІСЛЯ відповіді бота
                     last_interaction_time = time.time()
                     print(Fore.MAGENTA + f"⏳ Таймер оновлено! Діалог продовжено на {CONVERSATION_TIMEOUT}с.")
                     
