@@ -48,22 +48,18 @@ class CommandProcessor:
 
     def _find_best_match(self, user_text):
         """
-        Шукає найбільш схожу команду (Fuzzy matching).
+        Шукає найбільш схожу команду (точне входження слів).
+        Перевіряє, чи слова тригера є окремими словами в тексті.
         """
-        best_ratio = 0
-        best_func = None
-        THRESHOLD = 80 
-
+        words_in_text = set(user_text.lower().split())
+        
         for triggers, func in self.commands.items():
             for trigger in triggers:
-                ratio = fuzz.partial_ratio(trigger, user_text)
-                if ratio > best_ratio:
-                    best_ratio = ratio
-                    best_func = func
-
+                trigger_words = set(trigger.lower().split())
+                # Перевіряємо, чи всі слова тригера є в тексті як окремі слова
+                if trigger_words.issubset(words_in_text):
+                    return func
         
-        if best_ratio >= THRESHOLD:
-            return best_func
         return None
 
     def _execute_ai_command(self, tag, user_text):

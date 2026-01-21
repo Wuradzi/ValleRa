@@ -23,22 +23,22 @@ class AIBrain:
         self.chat = None
         self.local_model = config.LOCAL_MODEL_LIGHT if config.LOW_RESOURCE_MODE else "llama3.2"
         
-        # СПОЧАТКУ пробуємо локальну модель Ollama
-        print("🧠 Спробую запустити локальну модель Ollama...")
-        if self._try_local_model():
-            self.use_local = True
-            return
-        
-        # Якщо локальна не працює, пробуємо Google AI
-        print("🔄 Локальна модель недоступна, пробую Google AI...")
+        # СПОЧАТКУ пробуємо Google AI
+        print("🧠 Спробую запустити Google AI...")
         if self._try_google_ai():
             self.use_local = False
             return
         
+        # Якщо Google не працює, пробуємо локальну модель Ollama
+        print("🔄 Google AI недоступний, пробую локальну модель Ollama...")
+        if self._try_local_model():
+            self.use_local = True
+            return
+        
         # Якщо нічого не працює
-        print("❌ Ні локальна модель, ні Google AI не доступні!")
-        print("💡 Запустіть Ollama: ollama serve")
-        print("💡 Або перевірте ключ Google API")
+        print("❌ Ні Google AI, ні локальна модель не доступні!")
+        print("💡 Перевірте ключ Google API")
+        print("💡 Або запустіть Ollama: ollama serve")
     
     def _try_local_model(self):
         """Перевіряємо локальну модель Ollama"""
@@ -63,15 +63,35 @@ class AIBrain:
             print(f"❌ Ollama недоступний: {e}")
             return False
     
+    def _choose_sight_model(self):
+        """Обираємо найкращу модель для зору залежно від доступності"""
+        sight_models = [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-3-flash"
+        ]
+        
+        for model in sight_models:
+            try:
+                # Пробуємо створити простий chat, щоб перевірити доступність
+                test_chat = self.client.chats.create(model=model, config=self.config)
+                print(f"✅ Модель для зору: {model}")
+                return model
+            except Exception as e:
+                if "404" in str(e):
+                    continue
+                return sight_models[0]
+        
+        return sight_models[0]
+    
     def _try_google_ai(self):
         """Перевіряємо Google AI"""
         try:
             self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
-            self.model_name = "gemma-3-27b"  
-            self.vision_model = "gemma-3-27b"
+            self.model_name = "gemma-3-4b-it"  
             
             print(f"🧠 Підключаю: {self.model_name}...")
-            print(f"👀 Візія: {self.vision_model}...")
+            print(f"👁️ Зір: вибираю найкращу модель...")
             
             self.config = types.GenerateContentConfig(
                 safety_settings=[
@@ -99,6 +119,8 @@ class AIBrain:
                 model=self.model_name,
                 config=self.config
             )
+            # Обираємо найкращу модель для зору
+            self.sight_model = self._choose_sight_model()
             self.setup_character()
             print("✅ Мозок підключено (Google AI)!")
             return True
@@ -224,9 +246,9 @@ class AIBrain:
                     return "Ollama недоступний. Встановіть з https://ollama.ai"
             return "Голова болить."
 
-    # === 👁️ ФУНКЦІЯ ЗОРУ (Через Gemini 2.5) ===
+    # === 👁️ ФУНКЦІЯ ЗОРУ (ЗІР) ===
     def see(self, image_path, user_question):
-        print("👀 Дивлюсь на картинку...")
+        print("👁️ Розглядаю картинку...")
         try:
             image = Image.open(image_path)
             
@@ -237,9 +259,9 @@ class AIBrain:
                 f"Користувач питає: {user_question}"
             )
 
-            # Використовуємо 2.5 Flash для зору
+            # Використовуємо обрану модель для зору
             response = self.client.models.generate_content(
-                model=self.vision_model,
+                model=self.sight_model,
                 contents=[image, prompt],
                 config=self.config
             )
