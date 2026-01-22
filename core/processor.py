@@ -38,6 +38,9 @@ class CommandProcessor:
             self.voice.say("Дивлюсь...")
             return self.brain.see(path, text)
 
+        if skills.is_app_name(tag): 
+            return skills.open_program(tag)
+            
         return None
 
     def process(self, text):

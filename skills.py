@@ -33,29 +33,70 @@ def _ensure_app_index():
     APPS_SCANNED = True
     print(f"✅ Програм знайдено: {len(APPS_CACHE)}")
 
-def open_program(text):
-    _ensure_app_index()
-    query = text.lower().replace("запусти", "").replace("відкрий", "").strip()
+def open_program(text, voice=None, listener=None):
+    """
+    Розумний запуск програм з уточненням.
+    """
+    _ensure_app_index() # Переконуємось, що кеш є
     
+    # 1. Чистка: прибираємо слова-команди
+    ignore_words = ["відкрий", "запусти", "включи", "open", "launch", "start", "програму", "апку", "валера", "будь ласка"]
+    query = text.lower()
+    for word in ignore_words:
+        query = query.replace(word, "")
+    query = query.strip()
+    
+    if not query:
+        if voice and listener:
+            voice.say("Яку саме програму відкрити?")
+            answer = listener.listen()
+            if answer:
+                query = answer.lower()
+            else:
+                return "Я нічого не почув."
+        else:
+            return "Яку програму треба відкрити?"
+
+    print(f"🔎 Шукаю програму: '{query}'")
     best_match = None
-    # Простий пошук входження
-    for app in APPS_CACHE:
-        if query in app:
-            best_match = app
-            break 
-            
+    
+    # Шукаємо найкращий збіг
+    for app_name, app_path in APPS_CACHE.items():
+        if query in app_name:
+            if best_match is None or len(app_name) < len(best_match):
+                best_match = app_name
+                target_path = app_path
+
     if best_match:
         try:
-            os.startfile(APPS_CACHE[best_match])
+            os.startfile(target_path)
             return f"Запускаю {best_match}."
-        except: return "Помилка запуску файлу."
-    
-    return "Не знайшов такої програми."
+        except Exception as e:
+            return "Файл знайдено, але Windows не дає його запустити."
+    else:
+        return f"Я не знайшов програми з назвою {query}."
 
 def is_app_name(text):
+    """
+    Перевіряє, чи є текст назвою програми (ігноруючи команди).
+    """
     _ensure_app_index()
-    query = text.lower().strip()
-    return any(query in app for app in APPS_CACHE)
+    
+    # 1. Чистимо текст так само, як і при запуску
+    clean = text.lower()
+    ignore_words = ["запусти", "відкрий", "включи", "open", "launch", "start", "програму", "апку"]
+    for word in ignore_words:
+        clean = clean.replace(word, "").strip()
+    
+    if not clean:
+        return False
+        
+    # 2. Шукаємо збіг
+    for app_name in APPS_CACHE.keys():
+        if clean in app_name: 
+            return True
+            
+    return False
 
 def look_at_screen(text=None):
     """Робить скріншот і повертає шлях"""
