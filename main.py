@@ -24,7 +24,7 @@ def main():
     
     voice.say(f"{config.NAME} на зв'язку.")
 
-    last_interaction_time = 0
+    last_interaction_time = 0   
 
     while True:
         try:
@@ -39,7 +39,7 @@ def main():
             else:
                 print(Fore.BLUE + "\n💤 [Очікування] Скажи 'Валєра' для активації...")
 
-            # Слухаємо
+            # Слухаємо (і не засуджуємо)
             user_input = listener.listen()
             
             if user_input:

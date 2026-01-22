@@ -77,25 +77,17 @@ def open_program(text, voice=None, listener=None):
         return f"Я не знайшов програми з назвою {query}."
 
 def is_app_name(text):
-    """
-    Перевіряє, чи є текст назвою програми (ігноруючи команди).
-    """
     _ensure_app_index()
-    
-    # 1. Чистимо текст так само, як і при запуску
     clean = text.lower()
-    ignore_words = ["запусти", "відкрий", "включи", "open", "launch", "start", "програму", "апку"]
+    ignore_words = ["запусти", "відкрий", "включи", "open", "launch", "start", "програму", "апку", "будь ласка", "валера"]
     for word in ignore_words:
         clean = clean.replace(word, "").strip()
     
-    if not clean:
-        return False
+    if not clean: return False
         
-    # 2. Шукаємо збіг
     for app_name in APPS_CACHE.keys():
         if clean in app_name: 
             return True
-            
     return False
 
 def look_at_screen(text=None):
@@ -108,7 +100,6 @@ def look_at_screen(text=None):
         print(f"Screen error: {e}")
         return None
 
-# === БАЗОВІ КОМАНДИ ===
 
 def turn_off_pc(text=None):
     os.system("shutdown /s /t 30")
@@ -131,6 +122,21 @@ def volume_up(text=None):
 def volume_down(text=None):
     for _ in range(5): pyautogui.press('volumedown')
     return "Тихіше."
+
+def media_play_pause(text=None):
+    pyautogui.press("playpause")
+    return "Ок."
+
+def media_next(text=None):
+    pyautogui.press("nexttrack")
+    return "Наступний трек."
+
+def media_prev(text=None):
+    pyautogui.press("prevtrack")
+    return "Попередній трек."
+
+def click_play(text=None):
+    return media_play_pause()
 
 def take_screenshot(text=None):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -158,3 +164,49 @@ def check_weather(text):
 def get_custom_knowledge(text):
     # Тут можна читати .txt файли з папки knowledge
     return ""
+
+# === ПАМ'ЯТЬ (JSON) ===
+MEMORY_FILE = "core/memory.json"
+
+def _load_memory():
+    if not os.path.exists(MEMORY_FILE): return {}
+    try:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
+    except: return {}
+
+def _save_memory(data):
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def remember_data(text, voice=None, listener=None):
+    """Команда: Запам'ятай [ключ] [значення]"""
+    clean = text.lower().replace("запам'ятай", "").replace("запиши", "").strip()
+    parts = clean.split(" ", 1) # Ділимо по першому пробілу
+    
+    if len(parts) < 2: return "Що саме запам'ятати? Скажи: запам'ятай код 1234."
+    
+    key, value = parts[0], parts[1]
+    data = _load_memory()
+    data[key] = value
+    _save_memory(data)
+    return f"Записав: {key} — {value}."
+
+def recall_data(text, voice=None, listener=None):
+    """Команда: Нагадай [ключ]"""
+    clean = text.lower().replace("нагадай", "").replace("що ти знаєш про", "").strip()
+    data = _load_memory()
+    
+    if clean in data:
+        return f"{clean}: {data[clean]}"
+    
+    # Шукаємо схоже
+    for k, v in data.items():
+        if clean in k: return f"Знайшов {k}: {v}"
+        
+    return "Я нічого такого не пам'ятаю."
+
+def teach_alias(text, voice=None, listener=None):
+    return "Функція навчання поки в розробці." # Заглушка, щоб не крашилось
+
+def teach_response(text, voice=None, listener=None):
+    return "Функція навчання відповідей поки в розробці."

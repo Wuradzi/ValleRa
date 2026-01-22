@@ -18,6 +18,10 @@ class CommandProcessor:
             ("стоп", "скасуй", "відміна"): skills.cancel_shutdown,
             ("гучніше",): skills.volume_up,
             ("тихіше",): skills.volume_down,
+            ("пауза", "продовжити", "музика", "стоп"): skills.media_play_pause,
+            ("наступний", "наступна", "далі", "перемкни"): skills.media_next,
+            ("попередній", "назад", "верни"): skills.media_prev,
+            ("натисни", "клік"): skills.click_play,
         }
 
     def _execute_tag(self, tag, text):
@@ -58,10 +62,14 @@ class CommandProcessor:
                     if res: self.voice.say(res)
                     return
 
-        # 2. Програми
         if skills.is_app_name(clean_text):
-            self.voice.say(f"Запускаю {clean_text}")
-            skills.open_program(clean_text)
+            print(f"🚀 Це програма: {clean_text}")
+
+            response = skills.open_program(clean_text)
+            
+            if response:
+                self.voice.say(response)
+                
             return
 
         # 3. AI (Gemma 3)
@@ -75,7 +83,6 @@ class CommandProcessor:
         
         if match:
             tag = match.group(1)
-            # ІГНОРУЄМО текст від AI, виконуємо команду
             result_voice = self._execute_tag(tag, clean_text)
             if result_voice:
                 self.voice.say(result_voice)
