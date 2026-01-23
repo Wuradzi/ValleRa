@@ -14,3 +14,4 @@ duckduckgo_search
 geopy
 thefuzz
 ollama
+pyperclip

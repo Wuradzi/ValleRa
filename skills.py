@@ -8,11 +8,46 @@ import json
 import requests
 from geopy.geocoders import Nominatim
 from duckduckgo_search import DDGS
+import pyperclip
+import ctypes
 
 APPS_CACHE = {}
 APPS_SCANNED = False
 
 # === СИСТЕМНІ УТИЛІТИ ===
+
+def system_status(text=None):
+    try:
+        # Батарея
+        battery = psutil.sensors_battery()
+        bat_msg = f"Заряд {battery.percent}%" if battery else "Працюємо від мережі"
+        
+        # Процесор та пам'ять
+        cpu = psutil.cpu_percent(interval=0.5)
+        mem = psutil.virtual_memory().percent
+        
+        return f"Доповідаю: {bat_msg}. Процесор навантажений на {cpu}%. Оперативна пам'ять зайнята на {mem}%."
+    except:
+        return "Не можу отримати дані про систему."
+
+def read_clipboard(text=None):
+    try:
+        content = pyperclip.paste()
+        if not content:
+            return "Буфер обміну порожній."
+        
+        # Якщо тексту дуже багато, скорочуємо для логу, але повертаємо весь
+        print(f"📋 З буфера: {content[:50]}...")
+        return f"У буфері: {content}" 
+    except:
+        return "Не можу прочитати буфер."
+
+def lock_screen(text=None):
+    try:
+        ctypes.windll.user32.LockWorkStation()
+        return "Екран заблоковано."
+    except:
+        return "Не вдалося заблокувати."
 
 def _ensure_app_index():
     global APPS_CACHE, APPS_SCANNED
@@ -88,7 +123,23 @@ def is_app_name(text):
     for app_name in APPS_CACHE.keys():
         if clean in app_name: 
             return True
-    return False
+        
+def close_app(text, voice=None, listener=None):
+    # Чистимо команду, залишаємо назву (наприклад "калькулятор")
+    query = text.lower().replace("закрий", "").replace("вбий", "").strip()
+    
+    killed = False
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            # Шукаємо процес, назва якого схожа на запит
+            if query in proc.info['name'].lower():
+                proc.kill()
+                killed = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+            
+    if killed: return f"Закрив {query}."
+    return f"Не знайшов процесу {query}."
 
 def look_at_screen(text=None):
     """Робить скріншот і повертає шлях"""
@@ -162,7 +213,21 @@ def check_weather(text):
     except: return "Помилка з'єднання."
 
 def get_custom_knowledge(text):
-    # Тут можна читати .txt файли з папки knowledge
+    knowledge_dir = "knowledge"
+    if not os.path.exists(knowledge_dir): return ""
+    
+    found_info = []
+    for filename in os.listdir(knowledge_dir):
+        if filename.endswith(".txt"):
+            try:
+                with open(os.path.join(knowledge_dir, filename), "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if filename.replace(".txt", "").lower() in text.lower():
+                        found_info.append(f"[{filename}]: {content}")
+            except: pass
+            
+    if found_info:
+        return "\n".join(found_info)
     return ""
 
 # === ПАМ'ЯТЬ (JSON) ===
