@@ -1,3 +1,4 @@
+# core/speak.py
 import edge_tts
 import asyncio
 import pygame
@@ -6,9 +7,14 @@ import os
 class VoiceEngine:
     def __init__(self):
         self.voice = 'uk-UA-OstapNeural'
-        self.file = "response.mp3"
+        
+        # Визначаємо абсолютний шлях до файлу, щоб не губити його
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.file = os.path.join(base_dir, "response.mp3")
+        
         self.audio_initialized = False
         try:
+            # На Linux іноді треба явно вказати частоту, але зазвичай auto працює
             pygame.mixer.init()
             self.audio_initialized = True
         except pygame.error as e:
@@ -25,25 +31,26 @@ class VoiceEngine:
             await self._generate(text)
             
             if self.audio_initialized and pygame.mixer.get_init():
-                pygame.mixer.music.load(self.file)
-                pygame.mixer.music.play()
-                
-                while pygame.mixer.music.get_busy():
-                    await asyncio.sleep(0.1)  # Асинхронне очікування
-                
-                pygame.mixer.music.unload()
+                try:
+                    pygame.mixer.music.load(self.file)
+                    pygame.mixer.music.play()
+                    
+                    while pygame.mixer.music.get_busy():
+                        await asyncio.sleep(0.1)
+                    
+                    pygame.mixer.music.unload()
+                except pygame.error:
+                    print("⚠️ Помилка відтворення аудіо (можливо, зайнятий пристрій).")
             else:
-                print("Аудіо не ініціалізовано, відтворення пропущено.")
+                print("🔇 (Режим без звуку)")
             
         except Exception as e:
-            print(f"❌ Помилка голосу: {e}")
+            print(f"❌ Помилка TTS: {e}")
         finally:
             if os.path.exists(self.file):
                 try:
                     os.remove(self.file)
-                except:
-                    pass
+                except: pass
 
     def say(self, text):
-        # Синхронний виклик для сумісності
         asyncio.run(self.say_async(text))

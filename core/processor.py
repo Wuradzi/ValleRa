@@ -79,8 +79,20 @@ class CommandProcessor:
         # 3. AI (Gemma 3)
         print("🧠 Gemma думає...")
         
-        context = skills.get_custom_knowledge(clean_text)
-        ai_reply = self.brain.think(clean_text, context_data=context)
+# Якщо юзер просить інформацію
+        search_triggers = ["розкажи про", "хто такий", "що таке", "знайди інфу", "який курс", "погода"]
+        web_context = ""
+        
+        if any(tr in clean_text for tr in search_triggers):
+            print("🕵️ Пошук даних в реальному часі...")
+            web_data = skills.search_internet(clean_text)
+            if web_data:
+                web_context = f"\n[ЗНАЙДЕНО В ІНТЕРНЕТІ]: {web_data}"
+        
+        # Додаємо це до існуючого контексту
+        full_context = skills.get_custom_knowledge(clean_text) + web_context
+        
+        ai_reply = self.brain.think(clean_text, context_data=full_context)
         
         # Парсинг тегів
         match = re.search(r"\[CMD:\s*(\w+)\]", ai_reply)
