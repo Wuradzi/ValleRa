@@ -35,6 +35,7 @@ class CommandProcessor:
             ("блокування", "заблокуй", "лок"): skills.lock_screen,
             ("запам'ятай", "запиши"): skills.remember_data,
             ("нагадай", "що ти знаєш"): skills.recall_data,
+            ("буди", "прокинься", "активуй"): skills.wake_up_pc,
         }
 
     def _execute_tag(self, tag):

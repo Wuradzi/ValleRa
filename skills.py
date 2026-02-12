@@ -251,6 +251,24 @@ def lock_screen(text=None):
         return "Блоковано."
     except: return "Помилка."
 
+def wake_up_pc(text=None):
+    """Будить комп'ютер (вимикає режим сну)."""
+    try:
+        if IS_LINUX:
+            # Вимкнути DPMS (енергозбереження монітора)
+            subprocess.Popen(["xset", "dpms", "force", "on"], 
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return "Комп'ютер активовано."
+        elif IS_WINDOWS:
+            # Windows - рухаємо мишею
+            import pyautogui
+            pyautogui.moveRel(1, 0)
+            pyautogui.moveRel(-1, 0)
+            return "Активовано."
+        return "Не вдалося активувати."
+    except Exception as e:
+        return f"Помилка: {e}"
+
 def close_app(text, voice=None, listener=None):
     q = text.lower().replace("закрий", "").replace("вбий", "").strip()
     for p in psutil.process_iter(['name']):
