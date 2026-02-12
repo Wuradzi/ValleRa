@@ -132,7 +132,7 @@ def main():
             
             if user_input:
                 text = user_input.lower()
-                triggers = ["валера", "валєра", "валерчик", "valera", "бот"]
+                triggers = config.TRIGGER_WORDS
                 
                 has_trigger = any(trigger in text for trigger in triggers)
                 
