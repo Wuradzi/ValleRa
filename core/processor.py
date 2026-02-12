@@ -112,7 +112,7 @@ class CommandProcessor:
         if not text: return
         print(f"👤 Юзер: {text}")
         
-        clean_text = text.lower().replace("валєра", "").replace("валера", "").strip()
+        clean_text = text.lower().replace("валєра", "").replace("валера", "").replace("бот", "").strip()
 
         # 1. Жорсткі команди (Пріоритет)
         for triggers, func in self.hard_commands.items():
@@ -131,7 +131,7 @@ class CommandProcessor:
             return
 
         # 3. AI (Gemma 3)
-        print("🧠 Gemma думає...")
+        print("🧠 AI думає...")
         
         # Якщо юзер просить інформацію (Пошук)
         search_triggers = ["розкажи про", "хто такий", "що таке", "знайди інфу", "який курс", "погода"]
@@ -143,8 +143,30 @@ class CommandProcessor:
             if web_data:
                 web_context = f"\n[ЗНАЙДЕНО В ІНТЕРНЕТІ]: {web_data}"
         
+        # Додаємо контекст вікна
+        window_context = ""
+        try:
+            import subprocess
+            result = subprocess.run(['xdotool', 'getactivewindow', 'getwindowname'], 
+                                   capture_output=True, text=True, timeout=1)
+            if result.returncode == 0 and result.stdout.strip():
+                window_name = result.stdout.strip()[:50]
+                if window_name and window_name != "N/A":
+                    window_context = f"\n[АКТИВНЕ ВІКНО]: {window_name}"
+        except:
+            pass
+        
+        # Додаємо статус системи
+        status_context = ""
+        try:
+            cpu = __import__('psutil').cpu_percent()
+            memory = __import__('psutil').virtual_memory()
+            status_context = f"\n[СТАН СИСТЕМИ]: CPU {cpu}% | RAM {memory.percent}%"
+        except:
+            pass
+        
         # Додаємо це до існуючого контексту
-        full_context = skills.get_custom_knowledge(clean_text) + web_context
+        full_context = skills.get_custom_knowledge(clean_text) + web_context + window_context + status_context
         
         ai_reply = self.brain.think(clean_text, context_data=full_context)
         

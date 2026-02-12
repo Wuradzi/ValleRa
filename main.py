@@ -10,11 +10,15 @@ import time
 import platform
 import os
 import sys
+import psutil
+from datetime import datetime
 from contextlib import contextmanager
 
 colorama.init(autoreset=True)
 
-CONVERSATION_TIMEOUT = 30 
+# Налаштування діалогу
+CONVERSATION_TIMEOUT = 60  # 1 хвилина активного діалогу
+EXTEND_TIMEOUT = 45  # Продовжувати ще на 45 сек після кожної команди
 
 @contextmanager
 def ignore_stderr():
@@ -33,8 +37,56 @@ def ignore_stderr():
     except Exception:
         yield
 
+def get_active_window():
+    """Отримує назву активного вікна."""
+    try:
+        import subprocess
+        # Linux - використовуємо xdotool або wmctrl
+        result = subprocess.run(['xdotool', 'getactivewindow', 'getwindowname'], 
+                             capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            name = result.stdout.strip()
+            if name and name != "N/A":
+                # Скорочуємо довгі назви
+                if len(name) > 40:
+                    name = name[:37] + "..."
+                return name
+        
+        # Альтернатива - PID процесу
+        result = subprocess.run(['xdotool', 'getactivewindow', 'getwindowpid'], 
+                             capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            pid = result.stdout.strip()
+            try:
+                proc = psutil.Process(int(pid))
+                return proc.name()
+            except:
+                pass
+    except:
+        pass
+    return None
+
+def get_system_status():
+    """Отримує короткий статус системи."""
+    try:
+        cpu = psutil.cpu_percent()
+        memory = psutil.virtual_memory()
+        battery = None
+        try:
+            battery = psutil.sensors_battery()
+        except:
+            pass
+        
+        status = f"CPU: {cpu}% | RAM: {memory.percent}%"
+        if battery:
+            status += f" | 🔋 {battery.percent}%"
+        return status
+    except:
+        return None
+
 def main():
     os_name = platform.system()
+    hostname = platform.node()
     print(Fore.CYAN + "=======================================")
     print(Fore.CYAN + f"🚀 {config.NAME} (Neuro-Core) Запущено на {os_name}")
     print(Fore.GREEN + "💪 Повний режим: всі функції доступні")
@@ -53,15 +105,25 @@ def main():
     voice.say(f"{config.NAME} на зв'язку.")
 
     last_interaction_time = 0
-
+    last_status_time = 0
+    
     while True:
         try:
-            time_passed = time.time() - last_interaction_time
+            current_time = time.time()
+            time_passed = current_time - last_interaction_time
             is_active_dialog = time_passed < CONVERSATION_TIMEOUT
-            time_left = int(CONVERSATION_TIMEOUT - time_passed)
+            time_left = max(0, int(CONVERSATION_TIMEOUT - time_passed))
+
+            # Отримуємо активне вікно кожні 2 секунди
+            if int(current_time) % 2 == 0:
+                active_window = get_active_window()
+            else:
+                active_window = None
 
             if is_active_dialog:
-                print(Fore.YELLOW + f"\n👀 [Активний діалог] Слухаю... ({time_left}с)")
+                print(Fore.YELLOW + f"\n👂 [Діалог] Слухаю... ({time_left}с)")
+                if active_window:
+                    print(Fore.BLUE + f"   📱 Вікно: {active_window}")
             else:
                 print(Fore.BLUE + "\n💤 [Очікування] Скажи 'Валєра'...")
 
@@ -75,13 +137,18 @@ def main():
                 has_trigger = any(trigger in text for trigger in triggers)
                 
                 if has_trigger or is_active_dialog:
-                    print(Fore.WHITE + f"🗣️ Почув: {user_input}")
+                    print(Fore.WHITE + f"\n🗣️ Почув: {user_input}")
+                    
+                    # Показуємо контекст
+                    if active_window:
+                        print(Fore.CYAN + f"   📱 Активне вікно: {active_window}")
+                    
                     print(Fore.GREEN + "⚡ Обробка...")
 
                     brain.process(text)
                     
                     last_interaction_time = time.time()
-                    print(Fore.MAGENTA + f"⏳ Таймер оновлено!")
+                    print(Fore.MAGENTA + f"⏳ Діалог активний ще {EXTEND_TIMEOUT}с")
                     
         except KeyboardInterrupt:
             print(Fore.RED + "\n🛑 Примусова зупинка.")
