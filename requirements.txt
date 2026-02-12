@@ -16,3 +16,4 @@ geopy
 thefuzz
 ollama
 pyperclip
+faster-whisper
