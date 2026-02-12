@@ -401,5 +401,10 @@ def recall_data(text, voice=None, listener=None):
             return f"Пам'ятаю {count} записів: {keys}..."
     
     return f"Не знайшов '{query}' в пам'яті."
+
+def get_custom_knowledge(text):
+    """Повертає користувацькі знання (заглушка для майбутнього)."""
+    return ""
+
 def teach_alias(t,v,l): return ""
 def teach_response(t,v,l): return ""
