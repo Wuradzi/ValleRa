@@ -248,6 +248,33 @@ def read_clipboard(text=None, voice=None, listener=None):
 def system_status(text=None):
     return f"CPU: {psutil.cpu_percent()}%"
 
+def check_weather(text):
+    ignore_words = ["погода", "weather", "скажи", "яка", "зараз", "у", "в"]
+    city = text.lower()
+    for word in ignore_words:
+        city = city.replace(f" {word} ", " ").replace(word, "")
+    
+    city = city.strip()
+    
+    print(f"🌍 Дивлюсь погоду для: '{city}'")
+
+    try:
+        if city:
+            url = f"https://wttr.in/{city}?format=3&lang=uk"
+        else:
+            url = "https://wttr.in/?format=3&lang=uk"
+            
+        r = requests.get(url, timeout=5)
+        
+        if r.status_code == 200:
+            return r.text.strip()
+        else:
+            return "Сайт погоди не відповідає."
+            
+    except Exception as e:
+        print(f"Weather Error: {e}")
+        return "Не можу з'єднатися з сервером погоди."
+
 def get_time(text=None): return datetime.datetime.now().strftime("%H:%M")
 def get_date(text=None): return str(datetime.date.today())
 def volume_up(text=None): pyautogui.press('volumeup'); return "Гучніше."
@@ -261,9 +288,6 @@ def take_screenshot(text=None):
     return "Скрін є."
 def search_google(t): webbrowser.open(f"https://google.com/search?q={t.replace('гугл','').strip()}"); return "Шукаю."
 def search_youtube_clip(t): webbrowser.open(f"https://www.youtube.com/results?search_query={t.replace('ютуб','').strip()}"); return "Ютуб."
-def check_weather(t): 
-    try: return requests.get("https://wttr.in/?format=3").text
-    except: return "Нема іннету."
 def get_custom_knowledge(t): return ""
 def remember_data(t,v,l): return "Записав."
 def recall_data(t,v,l): return "Не знаю."

@@ -12,34 +12,26 @@ import os
 import sys
 from contextlib import contextmanager
 
-# На Linux autoreset іноді працює інакше, але init() корисний
 colorama.init(autoreset=True)
 
 CONVERSATION_TIMEOUT = 30 
 
-# === 🔇 УНІВЕРСАЛЬНИЙ ГЛУШНИК (ALSA + JACK) ===
 @contextmanager
 def ignore_stderr():
     """Перенаправляє потік помилок C-рівня в /dev/null"""
     try:
-        # Відкриваємо "чорну діру"
         devnull = os.open(os.devnull, os.O_WRONLY)
-        # Зберігаємо оригінальний stderr (щоб потім відновити)
         old_stderr = os.dup(2)
         sys.stderr.flush()
-        # Перенаправляем stderr у devnull
         os.dup2(devnull, 2)
         os.close(devnull)
         try:
             yield
         finally:
-            # Відновлюємо stderr назад
             os.dup2(old_stderr, 2)
             os.close(old_stderr)
     except Exception:
-        # Якщо щось пішло не так (наприклад, на Windows), просто працюємо як є
         yield
-# ===============================================
 
 def main():
     os_name = platform.system()
@@ -49,7 +41,6 @@ def main():
     print(Fore.CYAN + "=======================================")
 
     try:
-        # Глушимо шум під час ініціалізації мікрофона
         with ignore_stderr():
             listener = Listener()
             voice = VoiceEngine()
@@ -74,7 +65,6 @@ def main():
             else:
                 print(Fore.BLUE + "\n💤 [Очікування] Скажи 'Валєра'...")
 
-            # 🔥 ГЛУШИМО ШУМ ПІД ЧАС ПРОСЛУХОВУВАННЯ
             with ignore_stderr():
                 user_input = listener.listen()
             
