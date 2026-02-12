@@ -30,7 +30,7 @@ class CommandProcessor:
             ("попередній", "назад", "верни"): skills.media_prev,
             ("натисни", "клік"): skills.click_play,
             ("прочитай", "що в буфері", "озвуч"): skills.read_clipboard,
-            ("статус", "система", "навантаження", "як ти"): skills.system_status,
+            ("статус", "система", "навантаження"): skills.system_status,
             ("закрий", "вбий"): skills.close_app,
             ("блокування", "заблокуй", "лок"): skills.lock_screen,
             ("запам'ятай", "запиши"): skills.remember_data,
