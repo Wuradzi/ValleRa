@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
-# main.py
+
 """
 ValleRa - Ukrainian Voice Assistant
 
 A voice-controlled AI assistant for Linux/Windows with Gemini/Gemma AI integration.
 """
+
 import config
 from core.listen import Listener
 from core.speak import VoiceEngine
