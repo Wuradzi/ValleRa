@@ -70,16 +70,36 @@ class CommandProcessor:
         try:
             # Перенаправляємо stdout (консоль) у наш буфер
             with contextlib.redirect_stdout(str_io):
-                # Створюємо безпечне середовище
-                local_scope = {
-                    "os": os, 
-                    "sys": sys, 
-                    "platform": platform,
-                    "math": math,
-                    "random": random,
-                    "skills": skills
+                # ІЗОЛЬОВАНЕ середовище - НЕ даємо доступ до globals()
+                safe_builtins = {
+                    'print': print,
+                    'len': len,
+                    'str': str,
+                    'int': int,
+                    'float': float,
+                    'list': list,
+                    'dict': dict,
+                    'range': range,
+                    'sum': sum,
+                    'min': min,
+                    'max': max,
+                    'abs': abs,
+                    'round': round,
+                    'sorted': sorted,
+                    'reversed': reversed,
+                    'enumerate': enumerate,
+                    'zip': zip,
+                    'map': map,
+                    'filter': filter,
                 }
-                exec(code, globals(), local_scope)
+                safe_scope = {
+                    "os": {"getcwd": os.getcwd, "listdir": os.listdir},
+                    "sys": {"argv": sys.argv},
+                    "platform": {"system": platform.system, "machine": platform.machine},
+                    "math": {"pi": math.pi, "sqrt": math.sqrt, "pow": math.pow, "sin": math.sin, "cos": math.cos},
+                    "random": {"random": random.random, "randint": random.randint, "choice": random.choice},
+                }
+                exec(code, safe_builtins, safe_scope)
             
             output = str_io.getvalue()
             if not output: output = "Код виконано (без виводу)."

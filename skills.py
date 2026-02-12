@@ -10,6 +10,7 @@ import platform
 import pyperclip
 from thefuzz import fuzz 
 from duckduckgo_search import DDGS
+import shlex
 
 # === ВИЗНАЧЕННЯ СИСТЕМИ ===
 SYSTEM = platform.system()
@@ -21,6 +22,7 @@ if IS_WINDOWS:
 
 APPS_CACHE = {} 
 APPS_SCANNED = False
+PENDING_CONFIRMATION = None  # Для підтвердження небезпечних команд
 
 def search_internet(text):
     """Шукає інформацію в DuckDuckGo і повертає текст для читання."""
@@ -173,7 +175,7 @@ def open_program(text, voice=None, listener=None):
         for cand in candidates:
             if which(cand):
                 print(f"🚀 Знайдено в system PATH: {cand}")
-                subprocess.Popen(cand, shell=True, start_new_session=True)
+                subprocess.Popen([cand], start_new_session=True)
                 return f"Запускаю {cand}."
 
     if best_ratio >= THRESHOLD:
@@ -182,7 +184,9 @@ def open_program(text, voice=None, listener=None):
             if IS_WINDOWS:
                 os.startfile(best_cmd)
             else:
-                subprocess.Popen(best_cmd, shell=True, start_new_session=True)
+                # Безпечний запуск - без shell=True
+                cmd_list = shlex.split(best_cmd)
+                subprocess.Popen(cmd_list, start_new_session=True)
             return f"Запускаю {best_name}."
         except: return "Помилка запуску."
     
@@ -211,13 +215,33 @@ def is_app_name(text):
     return False
 
 def turn_off_pc(text=None):
-    if IS_WINDOWS: os.system("shutdown /s /t 30")
-    else: subprocess.Popen(["systemctl", "poweroff"])
-    return "Вимикаю..."
+    """Вимикає комп'ютер. Потребує підтвердження."""
+    global PENDING_CONFIRMATION
+    
+    if text and ("так" in text.lower() or "підтверди" in text.lower()):
+        if PENDING_CONFIRMATION == "shutdown":
+            if IS_WINDOWS: 
+                subprocess.Popen(["shutdown", "/s", "/t", "30"])
+            else:
+                subprocess.Popen(["systemctl", "poweroff"])
+            PENDING_CONFIRMATION = None
+            return "Вимикаю..."
+        else:
+            PENDING_CONFIRMATION = None
+    
+    # Запитуємо підтвердження
+    PENDING_CONFIRMATION = "shutdown"
+    return "Точно вимкнути комп'ютер? Скажи 'так' для підтвердження."
 
 def cancel_shutdown(text=None):
-    if IS_WINDOWS: os.system("shutdown /a")
-    else: subprocess.Popen(["shutdown", "-c"])
+    """Скасовує вимкнення."""
+    global PENDING_CONFIRMATION
+    PENDING_CONFIRMATION = None
+    
+    if IS_WINDOWS: 
+        subprocess.Popen(["shutdown", "/a"])
+    else:
+        subprocess.Popen(["shutdown", "-c"])
     return "Скасовано."
 
 def lock_screen(text=None):
@@ -288,8 +312,76 @@ def take_screenshot(text=None):
     return "Скрін є."
 def search_google(t): webbrowser.open(f"https://google.com/search?q={t.replace('гугл','').strip()}"); return "Шукаю."
 def search_youtube_clip(t): webbrowser.open(f"https://www.youtube.com/results?search_query={t.replace('ютуб','').strip()}"); return "Ютуб."
-def get_custom_knowledge(t): return ""
-def remember_data(t,v,l): return "Записав."
-def recall_data(t,v,l): return "Не знаю."
+MEMORY_FILE = os.path.expanduser("~/.valera_memory.json")
+
+def _load_memory():
+    """Завантажує пам'ять з файлу."""
+    try:
+        if os.path.exists(MEMORY_FILE):
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except:
+        pass
+    return {}
+
+def _save_memory(data):
+    """Зберігає пам'ять у файл."""
+    try:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
+def remember_data(text, voice=None, listener=None):
+    """Запам'ятовує дані. Формат: 'ключ: значення' або 'ключ = значення'"""
+    try:
+        # Шукаємо розділювач
+        if ":" in text:
+            key, value = text.split(":", 1)
+        elif "=" in text:
+            key, value = text.split("=", 1)
+        else:
+            # Якщо немає розділювача, все стає ключем
+            return "Використай формат: 'запам'ятай ключ: значення'"
+        
+        key = key.strip().lower()
+        value = value.strip()
+        
+        memory = _load_memory()
+        memory[key] = value
+        _save_memory(memory)
+        
+        return f"Запам'ятав: {key} = {value}"
+    except Exception as e:
+        return f"Помилка: {e}"
+
+def recall_data(text, voice=None, listener=None):
+    """Згадує запам'ятані дані."""
+    query = text.lower().strip()
+    memory = _load_memory()
+    
+    if not memory:
+        return "Пам'ять порожня."
+    
+    # Шукаємо точний збіг
+    if query in memory:
+        return f"{query}: {memory[query]}"
+    
+    # Шукаємо частковий збіг
+    for key, value in memory.items():
+        if query in key or key in query:
+            return f"{key}: {value}"
+    
+    # Показуємо все, якщо нічого не знайдено
+    if "що ти знаєш" in query or "все" in query:
+        if len(memory) <= 5:
+            items = "\n".join([f"- {k}: {v}" for k, v in memory.items()])
+            return f"Пам'ятаю:\n{items}"
+        else:
+            count = len(memory)
+            keys = ", ".join(list(memory.keys())[:5])
+            return f"Пам'ятаю {count} записів: {keys}..."
+    
+    return f"Не знайшов '{query}' в пам'яті."
 def teach_alias(t,v,l): return ""
 def teach_response(t,v,l): return ""
