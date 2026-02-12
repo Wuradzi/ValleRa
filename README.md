@@ -1,20 +1,25 @@
-# ValleRa — AI Voice Assistant
+# ValleRa — AI Voice Assistant 🇺🇦
 
 ValleRa is a Ukrainian-speaking AI voice assistant for controlling your computer. It uses natural language to execute commands, run programs, and answer questions.
 
 ## 🎯 Features
 
-- **Voice Control** — Wake word activation ("Валєра")
+- **Voice Control** — Wake word activation ("Валєра", "Ванера")
 - **Program Launcher** — Opens any installed application
 - **Web Search** — Searches Google, YouTube, and DuckDuckGo
 - **Weather** — Current weather conditions
 - **Python Code Execution** — AI can write and run Python code
 - **System Commands** — Volume control, screenshots, lock screen
 - **Vision** — Screenshots analyzed by AI
+- **Window Awareness** — Knows which app you're using
+- **Memory** — Remembers user data between sessions
 
 ## 🚀 Quick Start
 
 ```bash
+# Clone and enter directory
+cd ValleRa
+
 # Create virtual environment
 python3 -m venv venv
 source venv/bin/activate  # Linux
@@ -23,9 +28,9 @@ source venv/bin/activate  # Linux
 # Install dependencies
 pip install -r requirements.txt
 
-# Configure
-cp config_example.py config.py
-# Edit config.py with your API keys
+# Configure (add your API key)
+# Edit .env file:
+# GOOGLE_API_KEY=your_api_key_here
 
 # Run
 python main.py
@@ -35,28 +40,43 @@ python main.py
 
 ```
 ValleRa/
-├── main.py              # Entry point
-├── config.py            # Configuration
+├── main.py              # Entry point, main loop, logging
+├── config.py            # Configuration (API keys, models)
 ├── skills.py            # All skill functions
 ├── core/
-│   ├── ai_brain.py      # AI model integration (Gemma 3)
-│   ├── processor.py      # Command processing
-│   ├── listen.py        # Voice recognition
-│   └── speak.py          # Text-to-speech
+│   ├── __init__.py     # Core module exports
+│   ├── ai_brain.py     # AI model integration (Gemma 3/Gemini)
+│   ├── processor.py    # Command processing
+│   ├── listen.py       # Whisper voice recognition
+│   └── speak.py        # Edge TTS voice synthesis
+├── tests/
+│   ├── __init__.py     # Test suite
+│   └── test_core.py    # Basic tests
+├── .env                 # API keys (gitignored)
+├── .env.example         # Template for .env
+├── requirements.txt     # Dependencies
+├── valera.log          # Log file (created on run)
 ├── install.py           # Installation script
-└── requirements.txt    # Dependencies
+└── README.md           # This file
 ```
 
 ## ⚙️ Configuration
 
-Edit `config.py`:
+Create `.env` file:
+
+```bash
+# .env
+GOOGLE_API_KEY=your_google_api_key_here
+```
+
+Or edit `config.py` directly (not recommended for API keys):
 
 ```python
 NAME = "Валера"                    # Assistant name
-TRIGGER_WORDS = ["Валєра", "бот"] # Wake words
-MAIN_MODEL = "gemma-3-4b-it"      # Conversation model
-VISION_MODEL = "gemini-2.5-flash" # Vision model
-LANGUAGE = "uk-UA"                 # Ukrainian
+MAIN_MODEL = "gemma-3-4b-it"       # Conversation model ( Gemma 3 / Gemini 2.5 Pro)
+VISION_MODEL = "gemini-2.5-pro"    # Vision model
+TRIGGER_WORDS = ["валера", "ванер"] # Wake words
+CONVERSATION_TIMEOUT = 60           # Seconds in conversation mode
 ```
 
 ## 🗣️ Commands
@@ -67,8 +87,10 @@ LANGUAGE = "uk-UA"                 # Ukrainian
 | "Валєра, яка погода?" | Check weather |
 | "Валєра, знайди інформацію про Python" | Web search |
 | "Валєра, скріншот" | Take screenshot |
-| "Валєра, вимкни комп'ютер" | Shutdown PC |
-| "Валєра, запам'ятай пароль 123" | Remember data |
+| "Валєра, вимкни комп'ютер" | Shutdown PC (with confirmation) |
+| "Валєра, буди" | Wake from sleep |
+| "Валєра, запам'ятай ключ: значення" | Store in memory |
+| "Валєра, що ти знаєш?" | Recall stored memory |
 
 ## 🐍 Python Code Execution
 
@@ -80,14 +102,42 @@ AI: [PYTHON: print(2+2)]
 → "4"
 ```
 
+## 📝 Logging
+
+Logs are written to `valera.log`:
+
+```bash
+tail -f valera.log
+```
+
+## 🧪 Running Tests
+
+```bash
+# Install pytest
+pip install pytest
+
+# Run tests
+pytest tests/
+```
+
 ## 🛠️ Dependencies
 
-- Python 3.8+
-- Voice recognition & synthesis libraries
-- Gemma 3 / Gemini API keys
-- OpenAI SDK (optional)
+| Package | Purpose |
+|---------|---------|
+| `faster-whisper` | Offline voice recognition |
+| `google-genai` | Gemini API integration |
+| `edge-tts` | Ukrainian voice synthesis |
+| `psutil` | System monitoring |
+| `pygame` | Audio playback |
+| `pyautogui` | GUI automation |
+| `thefuzz` | Fuzzy string matching |
 
 See `requirements.txt` for full list.
+
+## 🖥️ Supported Platforms
+
+- **Linux** (tested on Ubuntu/Mint with Cinnamon)
+- **Windows** (basic support)
 
 ## 📝 License
 

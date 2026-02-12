@@ -18,3 +18,4 @@ ollama
 pyperclip
 faster-whisper
 pygetwindow
+pytest

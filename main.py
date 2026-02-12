@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # main.py
+"""
+ValleRa - Ukrainian Voice Assistant
+
+A voice-controlled AI assistant for Linux/Windows with Gemini/Gemma AI integration.
+"""
 import config
 from core.listen import Listener
 from core.speak import VoiceEngine
@@ -11,8 +16,20 @@ import platform
 import os
 import sys
 import psutil
+import logging
 from datetime import datetime
 from contextlib import contextmanager
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('valera.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 colorama.init(autoreset=True)
 
@@ -87,6 +104,8 @@ def get_system_status():
 def main():
     os_name = platform.system()
     hostname = platform.node()
+    
+    logger.info(f"ValleRa starting on {os_name}")
     print(Fore.CYAN + "=======================================")
     print(Fore.CYAN + f"🚀 {config.NAME} (Neuro-Core) Запущено на {os_name}")
     print(Fore.GREEN + "💪 Повний режим: всі функції доступні")
@@ -99,10 +118,12 @@ def main():
         
         brain = CommandProcessor(voice, listener)
     except Exception as e:
+        logger.error(f"Initialization error: {e}")
         print(Fore.RED + f"❌ Помилка ініціалізації: {e}")
         return
     
     voice.say(f"{config.NAME} на зв'язку.")
+    logger.info("ValleRa initialized and ready")
 
     last_interaction_time = 0
     last_status_time = 0
@@ -137,6 +158,7 @@ def main():
                 has_trigger = any(trigger in text for trigger in triggers)
                 
                 if has_trigger or is_active_dialog:
+                    logger.info(f"User said: {user_input}")
                     print(Fore.WHITE + f"\n🗣️ Почув: {user_input}")
                     
                     # Показуємо контекст
@@ -152,8 +174,10 @@ def main():
                     
         except KeyboardInterrupt:
             print(Fore.RED + "\n🛑 Примусова зупинка.")
+            logger.info("ValleRa stopped by user")
             break
         except Exception as e:
+            logger.error(f"Critical error: {e}")
             print(Fore.RED + f"⚠️ Критична помилка: {e}")
 
 if __name__ == "__main__":
