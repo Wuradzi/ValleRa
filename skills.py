@@ -444,3 +444,156 @@ def get_custom_knowledge(text):
 
 def teach_alias(t,v,l): return ""
 def teach_response(t,v,l): return ""
+
+# === НОВІ ФУНКЦІЇ ===
+
+TIMERS = {}
+NOTES_FILE = os.path.expanduser("~/.valera_notes.txt")
+
+def get_time(text=None): return datetime.datetime.now().strftime("%H:%M")
+def get_date(text=None): return str(datetime.date.today())
+
+def timer(text, voice=None, listener=None):
+    """Таймер: 'таймер 5 хвилин' або 'нагадай через 10 секунд'"""
+    import re
+    import time
+    
+    # Шукаємо число в тексті
+    match = re.search(r'(\d+)', text)
+    if not match:
+        return "Скажи, скільки хвилин або секунд."
+    
+    value = int(match.group(1))
+    duration = value
+    
+    # Визначаємо одиниці
+    if "секунд" in text.lower() or "сек" in text.lower():
+        duration = value
+        unit = "секунд"
+    elif "хвилин" in text.lower() or "хв" in text.lower():
+        duration = value * 60
+        unit = "хвилин"
+    elif "годин" in text.lower() or "год" in text.lower():
+        duration = value * 3600
+        unit = "годин"
+    else:
+        # За замовчуванням - хвилини
+        duration = value * 60
+        unit = "хвилин"
+    
+    end_time = time.time() + duration
+    TIMERS["active"] = end_time
+    
+    return f"Таймер на {value} {unit} запущено. Сповіщу через {value} {unit}."
+
+def check_timers():
+    """Перевіряє таймери (для виклику з циклу)."""
+    import time
+    if "active" in TIMERS:
+        if time.time() >= TIMERS["active"]:
+            del TIMERS["active"]
+            return True
+    return False
+
+def calculator(text, voice=None, listener=None):
+    """Простий калькулятор: 'порахуй 2+2' або 'скільки буде 10*5'"""
+    import re
+    
+    # Витягуємо математичний вираз
+    expr = text.lower()
+    ignore_words = ["порахуй", "скільки", "буде", "скільки", "дорівнює", "равно"]
+    for w in ignore_words:
+        expr = expr.replace(w, "").strip()
+    
+    # Замінюємо слова на символи
+    expr = expr.replace("×", "*").replace("х", "*").replace("×", "*")
+    expr = expr.replace("÷", "/").replace(":", "/")
+    expr = expr.replace("плюс", "+").replace("мінус", "-").replace("помножити", "*").replace("поділити", "/")
+    
+    # Залишаємо тільки цифри та оператори
+    allowed = "0123456789+-*/(). "
+    expr = ''.join(c for c in expr if c in allowed)
+    
+    try:
+        result = eval(expr)
+        # Форматуємо результат
+        if result == int(result):
+            result = int(result)
+        return f"{expr} = {result}"
+    except:
+        return "Не розумію вираз. Скажи: 'порахуй 2+2'"
+
+def list_processes(text=None, voice=None, listener=None):
+    """Показує запущені процеси."""
+    try:
+        processes = []
+        for p in psutil.process_iter(['name', 'cpu_percent']):
+            try:
+                info = p.info
+                if info['cpu_percent'] > 0:
+                    processes.append((info['name'], info['cpu_percent']))
+            except:
+                pass
+        
+        # Сортуємо за CPU
+        processes.sort(key=lambda x: x[1], reverse=True)
+        
+        # Топ 10
+        top = processes[:10]
+        if not top:
+            return "Немає активних процесів."
+        
+        lines = ["Топ процесів за CPU:"]
+        for name, cpu in top[:5]:
+            lines.append(f"- {name}: {cpu:.1f}%")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Помилка: {e}"
+
+def add_note(text, voice=None, listener=None):
+    """Додає нотатку: 'запиши нотатку купити хліб'"""
+    note = text.lower()
+    ignore = ["запиши", "нотатку", "нотатка", "замітка", "додай", "запам'ятай"]
+    for w in ignore:
+        note = note.replace(w, "").strip()
+    
+    if not note:
+        return "Що записати?"
+    
+    try:
+        with open(NOTES_FILE, "a", encoding="utf-8") as f:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            f.write(f"[{timestamp}] {note}\n")
+        return f"Записано: '{note}'"
+    except Exception as e:
+        return f"Помилка запису: {e}"
+
+def show_notes(text=None, voice=None, listener=None):
+    """Показує всі нотатки."""
+    try:
+        if not os.path.exists(NOTES_FILE):
+            return "Немає збережених нотаток."
+        
+        with open(NOTES_FILE, "r", encoding="utf-8") as f:
+            notes = f.read()
+        
+        if not notes.strip():
+            return "Немає нотаток."
+        
+        # Показуємо останні 5
+        lines = notes.strip().split("\n")[-5:]
+        result = ["Останні нотатки:"]
+        result.extend(lines)
+        return "\n".join(result)
+    except Exception as e:
+        return f"Помилка: {e}"
+
+def clear_notes(text=None, voice=None, listener=None):
+    """Очищує всі нотатки."""
+    try:
+        if os.path.exists(NOTES_FILE):
+            os.remove(NOTES_FILE)
+        return "Нотатки очищено."
+    except Exception as e:
+        return f"Помилка: {e}"

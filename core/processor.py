@@ -20,7 +20,7 @@ class CommandProcessor:
         # Швидкі команди (без інтернету)
         self.hard_commands = {
             ("час", "котра година"): skills.get_time,
-            ("дата", "яке число"): skills.get_date,
+            ("дата", "яке число", "яке число сьогодні"): skills.get_date,
             ("скрін", "фото екрану"): skills.take_screenshot,
             ("стоп", "скасуй", "відміна"): skills.cancel_shutdown,
             ("гучніше",): skills.volume_up,
@@ -30,12 +30,19 @@ class CommandProcessor:
             ("попередній", "назад", "верни"): skills.media_prev,
             ("натисни", "клік"): skills.click_play,
             ("прочитай", "що в буфері", "озвуч"): skills.read_clipboard,
-            ("статус", "система", "навантаження"): skills.system_status,
+            ("статус", "система", "навантаження", "процеси"): skills.system_status,
             ("закрий", "вбий"): skills.close_app,
             ("блокування", "заблокуй", "лок"): skills.lock_screen,
             ("запам'ятай", "запиши"): skills.remember_data,
             ("нагадай", "що ти знаєш"): skills.recall_data,
             ("буди", "прокинься", "активуй"): skills.wake_up_pc,
+            # Нові команди
+            ("таймер", "нагадай через", "через скільки"): skills.timer,
+            ("порахуй", "скільки", "скільки буде", "порахуй"): skills.calculator,
+            ("які процеси", "процеси", "запущені програми"): skills.list_processes,
+            ("запиши нотатку", "додай нотатку", "нотатка"): skills.add_note,
+            ("покажи нотатки", "нотатки", "що я записав"): skills.show_notes,
+            ("очисти нотатки", "видали нотатки"): skills.clear_notes,
         }
 
     def _execute_tag(self, tag):
