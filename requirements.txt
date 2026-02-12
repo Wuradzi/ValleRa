@@ -16,6 +16,4 @@ geopy
 thefuzz
 ollama
 pyperclip
-faster-whisper
-pygetwindow
 pytest
