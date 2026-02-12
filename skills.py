@@ -326,8 +326,20 @@ def media_next(text=None): pyautogui.press("nexttrack"); return "Далі."
 def media_prev(text=None): pyautogui.press("prevtrack"); return "Назад."
 def click_play(text=None): return media_play_pause()
 def take_screenshot(text=None): 
-    pyautogui.screenshot(f"screen_{datetime.datetime.now().strftime('%M%S')}.png")
-    return "Скрін є."
+    filename = f"screen_{datetime.datetime.now().strftime('%M%S')}.png"
+    pyautogui.screenshot(filename)
+    return filename
+
+def look_at_screen():
+    """Takes screenshot and returns path for AI vision."""
+    filename = f"vision_{datetime.datetime.now().strftime('%M%S%f')}.png"
+    try:
+        pyautogui.screenshot(filename)
+        return filename
+    except Exception as e:
+        print(f"Screenshot error: {e}")
+        return None
+
 def search_google(t): webbrowser.open(f"https://google.com/search?q={t.replace('гугл','').strip()}"); return "Шукаю."
 def search_youtube_clip(t): webbrowser.open(f"https://www.youtube.com/results?search_query={t.replace('ютуб','').strip()}"); return "Ютуб."
 MEMORY_FILE = os.path.expanduser("~/.valera_memory.json")
