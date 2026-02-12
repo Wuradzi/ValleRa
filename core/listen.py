@@ -9,9 +9,9 @@ class Listener:
         self.recognizer = sr.Recognizer()
         self.microphone = sr.Microphone()
         
-        # Load faster-whisper model
+        # Load faster-whisper model (tiny for older CPUs like ThinkPad x250)
         print("🎧 Завантажую Whisper model...")
-        self.whisper_model = faster_whisper.WhisperModel("base", compute_type="int8")
+        self.whisper_model = faster_whisper.WhisperModel("tiny", compute_type="int8")
         print("✅ Whisper ready.")
         
         # === НАЛАШТУВАННЯ "ТЕРПІННЯ" ===
