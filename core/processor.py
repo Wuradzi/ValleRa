@@ -115,6 +115,13 @@ class CommandProcessor:
         
         clean_text = text.lower().replace("валєра", "").replace("валера", "").replace("бот", "").strip()
 
+        # 0. Check for pending confirmations FIRST
+        if hasattr(skills, 'PENDING_CONFIRMATION') and skills.PENDING_CONFIRMATION:
+            result = skills.open_program(clean_text)
+            if result:
+                self.voice.say(result)
+                return
+
         # 1. Жорсткі команди (Пріоритет)
         for triggers, func in self.hard_commands.items():
             for t in triggers:

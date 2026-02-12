@@ -127,10 +127,28 @@ def _simplify_name(name):
         
     return clean.strip()
 
+PENDING_CONFIRMATION = None  # For program launch confirmation
+
 def open_program(text, voice=None, listener=None):
+    global PENDING_CONFIRMATION
+    
     _ensure_app_index()
     
-    ignore_words = ["відкрий", "запусти", "включи", "open", "launch", "start", "програму", "апку", "валера", "будь ласка"]
+    # Check for confirmation first
+    if PENDING_CONFIRMATION and PENDING_CONFIRMATION["type"] == "program":
+        if text and ("так" in text.lower() or "відкрий" in text.lower()):
+            cmd = PENDING_CONFIRMATION["cmd"]
+            try:
+                subprocess.Popen(shlex.split(cmd), start_new_session=True)
+                PENDING_CONFIRMATION = None
+                return f"Запускаю {PENDING_CONFIRMATION['name']}."
+            except:
+                PENDING_CONFIRMATION = None
+                return "Помилка запуску."
+        else:
+            PENDING_CONFIRMATION = None
+    
+    ignore_words = ["відкрий", "запусти", "включи", "open", "launch", "start", "програму", "апку", "будь ласка"]
     query = text.lower()
     for word in ignore_words:
         query = query.replace(word, "")
@@ -138,17 +156,17 @@ def open_program(text, voice=None, listener=None):
     
     if not query: return "Яку програму?"
     
+    # High confidence aliases
     aliases = {
-        "word": "libreoffice writer",
-        "excel": "libreoffice calc",
-        "powerpoint": "libreoffice impress",
         "браузер": "firefox",
-        "хром": "google chrome"
+        "хром": "google chrome",
+        "код": "vscode",
+        "редактор": "vscode",
     }
     if query in aliases:
         query = aliases[query]
 
-    print(f"🔎 Шукаю (Fuzzy): '{query}'")
+    print(f"🔎 Шукаю програму: '{query}'")
     
     best_name = None
     best_cmd = None
@@ -157,61 +175,67 @@ def open_program(text, voice=None, listener=None):
     for app_name, app_cmd in APPS_CACHE.items():
         simple_app = _simplify_name(app_name)
         
-        ratio = fuzz.partial_ratio(query, simple_app)
-        
+        # Exact match gets 100%
         if simple_app == query:
             ratio = 100
-            
+        else:
+            ratio = fuzz.ratio(query, simple_app)  # Use ratio, not partial_ratio
+        
         if ratio > best_ratio:
             best_ratio = ratio
             best_name = app_name
             best_cmd = app_cmd
     
-    THRESHOLD = 75 
+    # Higher threshold for less false positives
+    HIGH_THRESHOLD = 90
+    LOW_THRESHOLD = 75
     
-    if (best_ratio < THRESHOLD) and IS_LINUX:
+    # Check PATH as fallback
+    if best_ratio < LOW_THRESHOLD:
         from shutil import which
-        candidates = [query, query.replace(" ", "-")]
-        for cand in candidates:
-            if which(cand):
-                print(f"🚀 Знайдено в system PATH: {cand}")
-                subprocess.Popen([cand], start_new_session=True)
-                return f"Запускаю {cand}."
-
-    if best_ratio >= THRESHOLD:
-        print(f"✅ Знайдено: {best_name} (Схожість: {best_ratio}%) -> {best_cmd}")
+        if which(query):
+            PENDING_CONFIRMATION = {"type": "program", "cmd": query, "name": query}
+            return f"Знайшов '{query}' в системі. Відкрити? Скажи 'так'."
+    
+    if best_ratio >= HIGH_THRESHOLD:
+        print(f"✅ Знайдено: {best_name} (Схожість: {best_ratio}%)")
         try:
-            if IS_WINDOWS:
-                os.startfile(best_cmd)
-            else:
-                # Безпечний запуск - без shell=True
-                cmd_list = shlex.split(best_cmd)
-                subprocess.Popen(cmd_list, start_new_session=True)
+            subprocess.Popen(shlex.split(best_cmd), start_new_session=True)
             return f"Запускаю {best_name}."
         except: return "Помилка запуску."
     
-    return f"Не знайшов нічого схожого на {query}."
+    if best_ratio >= LOW_THRESHOLD:
+        # Ask for confirmation on lower confidence matches
+        PENDING_CONFIRMATION = {"type": "program", "cmd": best_cmd, "name": best_name}
+        return f"Можливо, ти маєш на увазі '{best_name}'? (Схожість: {best_ratio}%) Скажи 'так' для запуску."
+    
+    return f"Не знайшов програми '{query}'."
 
 def is_app_name(text):
     """
-    Перевіряє, чи схожий текст на назву програми.
-    Потрібно для processor.py, щоб не плутати команди з балачками.
+    Перевіряє, чи схожий текст ВИКЛЮЧНО на назву програми.
     """
     _ensure_app_index()
+    
+    # First check if user explicitly asked to open something
+    open_words = ["відкрий", "запусти", "включи", "open", "launch"]
+    has_open_intent = any(word in text.lower() for word in open_words)
+    
+    if not has_open_intent:
+        return False  # Don't assume it's a program if user didn't ask to open
+    
     clean = text.lower()
-    ignore = ["запусти", "відкрий", "включи", "open", "launch", "app"]
+    ignore = ["запусти", "відкрий", "включи", "open", "launch"]
     for w in ignore: clean = clean.replace(w, "").strip()
+    
     if not clean: return False
-
+    
+    # Only match with high confidence
     for app_name in APPS_CACHE.keys():
         simple = _simplify_name(app_name)
-        if fuzz.partial_ratio(clean, simple) > 80:
+        if fuzz.ratio(clean, simple) >= 90:
             return True
-            
-    if IS_LINUX:
-        from shutil import which
-        if which(clean): return True
-        
+    
     return False
 
 def turn_off_pc(text=None):
