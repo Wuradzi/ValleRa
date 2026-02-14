@@ -43,6 +43,10 @@ class CommandProcessor:
             ("запиши нотатку", "додай нотатку", "нотатка"): skills.add_note,
             ("покажи нотатки", "нотатки", "що я записав"): skills.show_notes,
             ("очисти нотатки", "видали нотатки"): skills.clear_notes,
+            # Покращення
+            ("переклади", "переклад", "переведи"): skills.translate_text,
+            ("допомога", "команди", "що ти вмієш"): skills.get_help,
+            ("погода", "прогноз"): skills.weather_forecast,
         }
 
     def _execute_tag(self, tag):
