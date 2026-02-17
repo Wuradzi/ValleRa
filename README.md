@@ -4,7 +4,7 @@ ValleRa is a Ukrainian-speaking AI voice assistant for controlling your computer
 
 ## 🎯 Features
 
-- **Voice Control** — Wake word activation ("Валєра", "Ванера")
+- **Voice Control** — Wake word activation ("Валера", "Ванера")
 - **Always Listening Mode** — Background hotword detection (optional)
 - **Program Launcher** — Opens any installed application
 - **Web Search** — Searches Google, YouTube, and DuckDuckGo
