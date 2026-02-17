@@ -5,6 +5,7 @@ ValleRa is a Ukrainian-speaking AI voice assistant for controlling your computer
 ## 🎯 Features
 
 - **Voice Control** — Wake word activation ("Валєра", "Ванера")
+- **Always Listening Mode** — Background hotword detection (optional)
 - **Program Launcher** — Opens any installed application
 - **Web Search** — Searches Google, YouTube, and DuckDuckGo
 - **Weather** — Current weather conditions
@@ -13,6 +14,9 @@ ValleRa is a Ukrainian-speaking AI voice assistant for controlling your computer
 - **Vision** — Screenshots analyzed by AI
 - **Window Awareness** — Knows which app you're using
 - **Memory** — Remembers user data between sessions
+- **Notes** — Quick note taking
+- **Timer** — Voice-controlled timers
+- **Calculator** — Voice math calculations
 
 ## 🚀 Quick Start
 
@@ -32,8 +36,11 @@ pip install -r requirements.txt
 # Edit .env file:
 # GOOGLE_API_KEY=your_api_key_here
 
-# Run
+# Run (Normal mode - say "Валєра" each time)
 python main.py
+
+# OR run (Always listening mode - background hotword)
+python main_hotword.py
 ```
 
 ## 📁 Project Structure
