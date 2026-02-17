@@ -5,6 +5,9 @@ import config
 from PIL import Image
 from collections import deque
 import platform 
+import os
+import json
+import hashlib
 
 class AIBrain:
     def __init__(self):
@@ -14,6 +17,10 @@ class AIBrain:
         self.vision_model = config.VISION_MODEL
         
         self.history = deque(maxlen=config.HISTORY_LIMIT)
+        
+        # Cache for template responses
+        self.cache_file = os.path.expanduser("~/.valera_response_cache.json")
+        self.response_cache = self._load_cache()
         
         # Визначаємо систему (Windows/Linux)
         self.os_type = platform.system()
@@ -31,38 +38,52 @@ class AIBrain:
         
         self._init_context()
 
-    def _init_context(self):
-        os_context = "Linux Mint" if self.os_type == "Linux" else "Windows"
-        
-        system_instruction = (
-            f"SYSTEM OVERRIDE: Ти — {config.NAME}, голосовий асистент для {os_context}.\n"
-            "Твоя задача — допомагати користувачу.\n\n"
-            
-            "ПРАВИЛА:\n"
-            "- На звичайні питання (як справи, що таке, хто такий) — відповідай просто текстом!\n"
-            "- НЕ пиши код [PYTHON: ...] для простих питань!\n"
-            "- [PYTHON: ...] — ТІЛЬКИ для обчислень, файлів, системної інформації.\n"
-            "- [CMD: ...] — ТІЛЬКИ для запуску програм (firefox, telegram, тощо).\n\n"
-            
-            "ПРИКЛАДИ:\n"
-            "Q: Як себе почуваєш?\n"
-            "A: Все добре, дякую! Готовий допомагати.\n\n"
-            "Q: Скільки буде 2+2?\n"
-            "A: [PYTHON: print(2+2)]\n\n"
-            "Q: Відкрий браузер\n"
-            "A: [CMD: firefox]\n"
-        )
-        
-        self.history.append(types.Content(
-            role="user", 
-            parts=[types.Part(text="SYSTEM: " + system_instruction)]
-        ))
-        self.history.append(types.Content(
-            role="model", 
-            parts=[types.Part(text=f"Зрозуміло. Я — {config.NAME}. Готовий допомагати на {os_context}.")]
-        ))
+    def _load_cache(self):
+        """Load response cache from file."""
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except:
+            pass
+        return {}
+
+    def _save_cache(self):
+        """Save response cache to file."""
+        try:
+            with open(self.cache_file, "w", encoding="utf-8") as f:
+                json.dump(self.response_cache, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+
+    def _get_cache_key(self, text):
+        """Create a cache key from text (normalize)."""
+        # Normalize text - lowercase, remove extra spaces
+        normalized = " ".join(text.lower().split())
+        return hashlib.md5(normalized.encode()).hexdigest()
+
+    def _is_template_phrase(self, text):
+        """Check if this is a template-like phrase (doesn't need dynamic info)."""
+        templates = [
+            "як себе почуваєш", "як справи", "що ти вмієш", "допомога",
+            "хто ти", "як тебе звати", "що таке", "хто такий",
+            "привіт", "доброго ранку", "добрий вечір", "добрий день",
+            "дякую", "подякувати", "до побачення", "на все добре",
+        ]
+        text_lower = text.lower()
+        return any(tmpl in text_lower for tmpl in templates)
 
     def think(self, text, context_data=""):
+        # Normalize text
+        normalized_text = " ".join(text.lower().split())
+        cache_key = self._get_cache_key(text)
+        
+        # Check cache for template phrases
+        if self._is_template_phrase(text) and cache_key in self.response_cache:
+            cached_response = self.response_cache[cache_key]
+            print(f"💾 Кеш: '{normalized_text[:30]}...'")
+            return cached_response
+
         try:
             current_prompt = text
             if context_data:
@@ -84,6 +105,12 @@ class AIBrain:
             
             model_content = types.Content(role="model", parts=[types.Part(text=answer)])
             self.history.append(model_content)
+            
+            # Cache template responses
+            if self._is_template_phrase(text):
+                self.response_cache[cache_key] = answer
+                self._save_cache()
+                print(f"💾 Збережено в кеш: '{normalized_text[:30]}...'")
             
             return answer
             
