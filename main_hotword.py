@@ -16,6 +16,7 @@ import platform
 import os
 import sys
 import psutil
+import subprocess
 import logging
 from datetime import datetime
 from contextlib import contextmanager
