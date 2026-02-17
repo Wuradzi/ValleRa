@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
 ValleRa TTS Cache - Pre-recorded audio responses
+Uses local audio_cache directory in project.
 """
 import os
 import asyncio
 import edge_tts
 from pathlib import Path
 
-# Кеш аудіо файлів
-AUDIO_CACHE_DIR = os.path.expanduser("~/.valera_audio_cache")
+# Кеш аудіо файлів - local directory in project
+AUDIO_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audio_cache")
 VOICE = "uk-UA-OstapNeural"
 
 # Попередньо записані відповіді
