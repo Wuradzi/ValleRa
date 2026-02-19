@@ -38,6 +38,38 @@ class AIBrain:
         
         self._init_context()
 
+    def _init_context(self):
+        """Initialize AI context with system prompt."""
+        os_context = "Linux Mint" if self.os_type == "Linux" else "Windows"
+        
+        system_instruction = (
+            f"SYSTEM OVERRIDE: Ти — {config.NAME}, голосовий асистент для {os_context}.\n"
+            "Твоя задача — допомагати користувачу.\n\n"
+            
+            "ПРАВИЛА:\n"
+            "- На звичайні питання (як справи, що таке, хто такий) — відповідай просто текстом!\n"
+            "- НЕ пиши код [PYTHON: ...] для простих питань!\n"
+            "- [PYTHON: ...] — ТІЛЬКИ для обчислень, файлів, системної інформації.\n"
+            "- [CMD: ...] — ТІЛЬКИ для запуску програм (firefox, telegram, тощо).\n\n"
+            
+            "ПРИКЛАДИ:\n"
+            "Q: Як себе почуваєш?\n"
+            "A: Все добре, дякую! Готовий допомагати.\n\n"
+            "Q: Скільки буде 2+2?\n"
+            "A: [PYTHON: print(2+2)]\n\n"
+            "Q: Відкрий браузер\n"
+            "A: [CMD: firefox]\n"
+        )
+        
+        self.history.append(types.Content(
+            role="user", 
+            parts=[types.Part(text="SYSTEM: " + system_instruction)]
+        ))
+        self.history.append(types.Content(
+            role="model", 
+            parts=[types.Part(text=f"Зрозуміло. Я — {config.NAME}. Готовий допомагати на {os_context}.")]
+        ))
+
     def _load_cache(self):
         """Load response cache from file."""
         try:

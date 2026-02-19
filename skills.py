@@ -1,6 +1,5 @@
 import os
 import datetime
-import pyautogui
 import webbrowser
 import psutil
 import json
@@ -8,6 +7,15 @@ import requests
 import subprocess
 import platform
 import pyperclip
+
+# Lazy import for pyautogui (requires display)
+def _get_pyautogui():
+    global pyautogui
+    try:
+        import pyautogui
+        return pyautogui
+    except Exception:
+        return None
 from thefuzz import fuzz 
 from duckduckgo_search import DDGS
 import shlex
@@ -286,8 +294,8 @@ def wake_up_pc(text=None):
         elif IS_WINDOWS:
             # Windows - рухаємо мишею
             import pyautogui
-            pyautogui.moveRel(1, 0)
-            pyautogui.moveRel(-1, 0)
+            _get_pyautogui().moveRel(1, 0)
+            _get_pyautogui().moveRel(-1, 0)
             return "Активовано."
         return "Не вдалося активувати."
     except Exception as e:
@@ -343,22 +351,22 @@ def check_weather(text):
 
 def get_time(text=None): return datetime.datetime.now().strftime("%H:%M")
 def get_date(text=None): return str(datetime.date.today())
-def volume_up(text=None): pyautogui.press('volumeup'); return "Гучніше."
-def volume_down(text=None): pyautogui.press('volumedown'); return "Тихіше."
-def media_play_pause(text=None): pyautogui.press("playpause"); return "Ок."
-def media_next(text=None): pyautogui.press("nexttrack"); return "Далі."
-def media_prev(text=None): pyautogui.press("prevtrack"); return "Назад."
+def volume_up(text=None): _get_pyautogui().press('volumeup'); return "Гучніше."
+def volume_down(text=None): _get_pyautogui().press('volumedown'); return "Тихіше."
+def media_play_pause(text=None): _get_pyautogui().press("playpause"); return "Ок."
+def media_next(text=None): _get_pyautogui().press("nexttrack"); return "Далі."
+def media_prev(text=None): _get_pyautogui().press("prevtrack"); return "Назад."
 def click_play(text=None): return media_play_pause()
 def take_screenshot(text=None): 
     filename = f"screen_{datetime.datetime.now().strftime('%M%S')}.png"
-    pyautogui.screenshot(filename)
+    _get_pyautogui().screenshot(filename)
     return filename
 
 def look_at_screen():
     """Takes screenshot and returns path for AI vision."""
     filename = f"vision_{datetime.datetime.now().strftime('%M%S%f')}.png"
     try:
-        pyautogui.screenshot(filename)
+        _get_pyautogui().screenshot(filename)
         return filename
     except Exception as e:
         print(f"Screenshot error: {e}")
