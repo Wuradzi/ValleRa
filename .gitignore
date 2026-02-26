@@ -3,7 +3,7 @@ __pycache__/
 *$py.class
 
 core/memory.json
-
+audio_cache/
 *.so
 *.png
 
