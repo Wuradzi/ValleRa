@@ -1,5 +1,5 @@
 # core/processor.py
-import skills
+import skills  # Теперь импортирует из папки skills/
 from core.ai_brain import AIBrain
 from thefuzz import fuzz
 import re

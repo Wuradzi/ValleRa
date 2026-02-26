@@ -20,6 +20,8 @@ import subprocess
 import logging
 from datetime import datetime
 from contextlib import contextmanager
+import shutil
+import signal
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +38,24 @@ colorama.init(autoreset=True)
 
 CONVERSATION_TIMEOUT = 60
 EXTEND_TIMEOUT = 45
+
+def cleanup_audio_cache():
+    """Очищує кеш аудіо файлів після завершення роботи."""
+    cache_dir = "audio_cache"
+    if os.path.exists(cache_dir):
+        try:
+            shutil.rmtree(cache_dir)
+            logger.info(f"✅ Кеш аудіо очищено: {cache_dir}")
+            print(Fore.GREEN + f"✅ Кеш аудіо очищено")
+        except Exception as e:
+            logger.error(f"⚠️ Помилка очистки кешу: {e}")
+            print(Fore.YELLOW + f"⚠️ Не вдалося очистити кеш: {e}")
+
+def signal_handler(sig, frame):
+    """Обробник сигналу для коректного завершення."""
+    print(Fore.RED + "\n🛑 Вихід...")
+    cleanup_audio_cache()
+    sys.exit(0)
 
 @contextmanager
 def ignore_stderr():
@@ -79,6 +99,9 @@ def get_active_window():
 def main_hotword():
     """Main function with always-listening hotword mode."""
     os_name = platform.system()
+    
+    # Регистрируем обработчик сигнала
+    signal.signal(signal.SIGINT, signal_handler)
     
     print(Fore.CYAN + "=" * 50)
     print(Fore.CYAN + f"🚀 ValleRa (Hotword Mode)")
@@ -159,6 +182,7 @@ def main_hotword():
                         
             except KeyboardInterrupt:
                 print(Fore.RED + "\n🛑 Вихід...")
+                cleanup_audio_cache()
                 break
             except Exception as e:
                 logger.error(f"Error: {e}")
@@ -168,6 +192,7 @@ def main_hotword():
         
     except Exception as e:
         print(Fore.RED + f"❌ Помилка ініціалізації: {e}")
+        cleanup_audio_cache()
         return
 
 if __name__ == "__main__":

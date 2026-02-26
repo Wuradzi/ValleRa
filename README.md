@@ -1,162 +1,250 @@
-# ValleRa — AI Voice Assistant 🇺🇦
+# 🤖 ValleRa - Український Голосовий Асистент
 
-ValleRa is a Ukrainian-speaking AI voice assistant for controlling your computer. It uses natural language to execute commands, run programs, and answer questions.
+Розумний голосовий асистент на українській мові з інтеграцією штучного інтелекту, гарячого слова і сучасною архітектурою.
 
-## 🎯 Features
+## 🌟 Можливості
 
-- **Voice Control** — Wake word activation ("Валера", "Ванера")
-- **Always Listening Mode** — Background hotword detection (optional)
-- **Program Launcher** — Opens any installed application
-- **Web Search** — Searches Google, YouTube, and DuckDuckGo
-- **Weather** — Current weather conditions and multi-day forecasts
-- **Python Code Execution** — AI can write and run Python code
-- **System Commands** — Volume control, screenshots, lock screen
-- **Vision** — Screenshots analyzed by AI
-- **Window Awareness** — Knows which app you're using
-- **Memory** — Remembers user data between sessions
-- **Notes** — Quick note-taking with history and clearing options
-- **Timer** — Voice-controlled timers with automatic alerts
-- **Calculator** — Voice math calculations
-- **Process Management** — Lists active processes
-- **Translation** — Translates text between languages and stores history
+### 🎤 Голосові команди
+- ⏰ **Час і дата** - "Валєра, який час?"
+- ⏱️ **Таймери** - "Таймер на 5 хвилин"
+- 🧮 **Калькулятор** - "Порахуй 2+2"
 
-## 🚀 Quick Start
+### 💻 Управління системою
+- 🔌 **Вимкнення** - "Вимкни комп'ютер"
+- 🔒 **Блокування** - "Заблокуй екран"
+- 👁️ **Скріншоти** - "Зроби скріншот"
+- 📊 **Статус системи** - "Покажи статус"
 
+### 📱 Управління програмами
+- 🚀 **Запуск програм** - "Відкрий Firefox"
+- 📋 **Список процесів** - "Які процеси запущені?"
+- ⚔️ **Закриття** - "Закрий [назва]"
+
+### 🌐 Пошук та інформація
+- 🔍 **Веб-пошук** - "Знайди інформацію про Python"
+- 🌦️ **Погода** - "Яка погода?"
+- 📺 **YouTube** - "Знайди на ютубі"
+
+### 📝 Нотатки та память
+- ✏️ **Додавання нотаток** - "Запиши нотатку купити хліб"
+- 📖 **Перегляд** - "Покажи нотатки"
+- 🧠 **Пам'ять** - "Запам'ятай ключ: значення"
+
+### 🎵 Мультимедія
+- 🔊 **Гучність** - "Гучніше" / "Тихіше"
+- ▶️ **Медіа** - "Грай" / "Стоп" / "Далі" / "Назад"
+
+### 🌍 Переклад
+- 🔤 **Перекладати** - "Переклади hello на українську"
+- 📚 **Історія** - "Покажи переклади"
+
+## 🛠️ Встановлення
+
+### 1. Клонування репозиторію
 ```bash
-# Clone and enter directory
+git clone https://github.com/Wuradzi/ValleRa.git
 cd ValleRa
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # Linux
-# venv\Scripts\activate     # Windows
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure (add your API key)
-# Edit .env file:
-# GOOGLE_API_KEY=your_api_key_here
-
-# Run (Normal mode - say "Валєра" each time)
-python main.py
-
-# OR run (Always listening mode - background hotword)
-python main_hotword.py
 ```
 
-## 📁 Project Structure
+### 2. Встановлення залежностей
+```bash
+# Рекомендується використовувати віртуальне середовище
+python3 -m venv venv
+source venv/bin/activate  # На Windows: venv\Scripts\activate
+
+# Встановлення пакетів
+pip install -r requirements.txt
+```
+
+### 3. Налаштування
+Скопіюй `.env.example` в `.env` та додай свої API ключі:
+```bash
+cp .env.example .env
+# Відредагуй .env з необхідними параметрами
+```
+
+## 🚀 Запуск
+
+### Нормальний режим
+```bash
+python main.py
+```
+У цьому режимі скажи "Валєра" перед кожною командою.
+
+### Режим гарячого слова (завжди слухає)
+```bash
+python main_hotword.py
+```
+Асистент автоматично активується при слові "Валєра".
+
+### Текстовий режим (для тестування)
+```bash
+python main_text.py
+```
+Введи команди у текстовому форматі без голосу.
+
+## 📁 Структура проекту
 
 ```
 ValleRa/
-├── main.py              # Entry point, main loop, logging
-├── config.py            # Configuration (API keys, models)
-├── skills.py            # All skill functions
-├── core/
-│   ├── __init__.py     # Core module exports
-│   ├── ai_brain.py     # AI model integration (Gemma 3/Gemini)
-│   ├── processor.py    # Command processing
-│   ├── listen.py       # Whisper voice recognition
-│   └── speak.py        # Edge TTS voice synthesis
-├── tests/
-│   ├── __init__.py     # Test suite
-│   └── test_core.py    # Basic tests
-├── .env                 # API keys (gitignored)
-├── .env.example         # Template for .env
-├── requirements.txt     # Dependencies
-├── valera.log          # Log file (created on run)
-├── install.py           # Installation script
-└── README.md           # This file
+├── main.py                  # Основний скрипт
+├── main_text.py            # Текстовий режим
+├── main_hotword.py         # Режим гарячого слова
+├── config.py               # Конфігурація
+├── config_example.py       # Приклад конфігурації
+├── requirements.txt        # Залежності
+├── .env.example            # Приклад змінних оточення
+│
+├── core/                   # Ядро асистента
+│   ├── ai_brain.py        # AI логіка
+│   ├── processor.py        # Обробка команд
+│   ├── listen.py          # Розпізнавання мовлення
+│   ├── speak.py           # Синтез мовлення
+│   └── tts_cache.py       # Кешування аудіо
+│
+├── skills/                 # Модулярна система навичок
+│   ├── __init__.py
+│   ├── system_skills.py    # Системні команди
+│   ├── program_skills.py   # Управління програмами
+│   ├── search_skills.py    # Пошук і навігація
+│   ├── note_skills.py      # Нотатки
+│   ├── media_skills.py     # Мультимедіа
+│   ├── utility_skills.py   # Утилити
+│   └── translation_skills.py  # Переклади
+│
+├── hotword_detector.py     # Детектор гарячого слова
+├── audio_cache/            # Кеш генерованого аудіо (очищується автоматично)
+└── tests/                  # Тести
 ```
 
-## ⚙️ Configuration
+## 🔧 Архітектура
 
-Create `.env` file:
+### Модульна система навичок
+Всі навички розділені на логічні модулі в папці `skills/`:
+- **system_skills.py** - Вимкнення, блокування, статус
+- **program_skills.py** - Запуск, закриття, управління програмами
+- **search_skills.py** - Веб-пошук, погода, YouTube
+- **note_skills.py** - Управління нотатками
+- **media_skills.py** - Гучність, плеєр, скріншоти
+- **utility_skills.py** - Час, таймер, калькулятор, пам'ять
+- **translation_skills.py** - Переклади
 
+### Обробка команд
+1. **Listener** (core/listen.py) - розпізнає мовлення
+2. **CommandProcessor** (core/processor.py) - маршрутизує команди
+3. **Skills** (skills/) - виконують дії
+4. **VoiceEngine** (core/speak.py) - озвучує результати
+
+### AI мозок
+**AIBrain** (core/ai_brain.py) генерує відповіді за допомогою ChatGPT/Claude для складніших запитів.
+
+## 🧹 Очистка кешу
+
+Аудіо кеш **автоматично очищується** при завершенні програми:
+- При закритті через Ctrl+C
+- При нормальному виході
+- При помилках завершення
+
+Кеш знаходиться в папці `audio_cache/` та містить кешовані аудіо файли для прискорення повторюваних команд.
+
+## 📋 Вимоги
+
+### Мінімум
+- Python 3.8+
+- Linux / Windows / macOS
+
+### Опціонально
+- **Google Translate** для перекладів: `pip install googletrans`
+- **pyautogui** для скріншотів: `pip install pyautogui`
+- xdotool (Linux) для управління вікнами
+
+## 🐛 Розв'язування проблем
+
+### "Не слишу мовлення"
 ```bash
-# .env
-GOOGLE_API_KEY=your_google_api_key_here
+# Перевір звукові пристрої
+pactl list short sources  # Linux
 ```
 
-Or edit `config.py` directly (not recommended for API keys):
+### "Помилка TTS"
+```bash
+# Переконайся, що espeak встановлений
+sudo apt install espeak-ng  # Linux
+```
 
+### "Немає інтернету"
+Багато функцій працюють офлайн. Перевір інтернет для:
+- Веб-пошуку
+- Погоди
+- AI мозку
+
+## 📞 Управління
+
+| Дія | Команда |
+|-----|---------|
+| Активація | Скажи "Валєра" |
+| Допомога | "Допомога" |
+| Вихід | Ctrl+C або "Вихід" |
+
+## 📖 Приклади використання
+
+### Звичайний діалог
+```
+> Валєра, який час?
+🔊 Голос: Зараз 14:30
+
+> Таймер на 5 хвилин
+🔊 Голос: Таймер запущено
+
+> Яка погода?
+🔊 Голос: В Києві зараз +5 градусів
+```
+
+### Запуск програм
+```
+> Відкрий браузер
+🔊 Голос: Запускаю Firefox
+
+> Закрий Chrome
+🔊 Голос: Вбив Google Chrome
+```
+
+### Робота з нотатками
+```
+> Запиши нотатку купити хліб
+🔊 Голос: Записано
+
+> Покажи мої нотатки
+🔊 Голос: [список нотаток]
+```
+
+## 🤝 Розробка
+
+Для додавання нової навички:
+
+1. Додай функцію в відповідний файл в `skills/`
+2. Експортуй її в `skills/__init__.py`
+3. Додай команду в `core/processor.py`
+
+Приклад нової навички:
 ```python
-NAME = "Валера"                    # Assistant name
-MAIN_MODEL = "gemma-3-4b-it"       # Conversation model ( Gemma 3 / Gemini 2.5 Pro)
-VISION_MODEL = "gemini-2.5-pro"    # Vision model
-TRIGGER_WORDS = ["валера", "ванер"] # Wake words
-CONVERSATION_TIMEOUT = 60           # Seconds in conversation mode
+# skills/my_skills.py
+def my_cool_command(text, voice=None, listener=None):
+    """Опис команди"""
+    result = do_something(text)
+    return f"Результат: {result}"
 ```
 
-## 🗣️ Commands
+## 📝 Ліцензія
 
-| Example | Action |
-|---------|--------|
-| "Валєра, відкрий Firefox" | Open Firefox |
-| "Валєра, яка погода?" | Check weather |
-| "Валєра, знайди інформацію про Python" | Web search |
-| "Валєра, скріншот" | Take screenshot |
-| "Валєра, вимкни комп'ютер" | Shutdown PC (with confirmation) |
-| "Валєра, буди" | Wake from sleep |
-| "Валєра, запам'ятай ключ: значення" | Store in memory |
-| "Валєра, що ти знаєш?" | Recall stored memory |
-| "Валєра, нотатки" | Show notes |
-| "Валєра, переведи привіт на англійську" | Translate text |
-| "Валєра, які процеси?" | List active processes |
-| "Валєра, таймер 5 хвилин" | Set a timer |
-| "Валєра, порахуй 10+5" | Simple calculator |
+MIT License - див. LICENSE файл
 
-## 🐍 Python Code Execution
+## 🙋 Контакти
 
-ValleRa can execute Python code generated by AI:
-
-```
-User: "Валєра, порахуй 2+2"
-AI: [PYTHON: print(2+2)]
-→ "4"
-```
-
-## 📝 Logging
-
-Logs are written to `valera.log`:
-
-```bash
-tail -f valera.log
-```
-
-## 🧪 Running Tests
-
-```bash
-# Install pytest
-pip install pytest
-
-# Run tests
-pytest tests/
-```
-
-## 🛠️ Dependencies
-
-| Package | Purpose |
-|---------|---------|
-| `faster-whisper` | Offline voice recognition |
-| `google-genai` | Gemini API integration |
-| `edge-tts` | Ukrainian voice synthesis |
-| `psutil` | System monitoring |
-| `pygame` | Audio playback |
-| `pyautogui` | GUI automation |
-| `thefuzz` | Fuzzy string matching |
-
-See `requirements.txt` for full list.
-
-## 🖥️ Supported Platforms
-
-- **Linux** (tested on Ubuntu/Mint with Cinnamon)
-- **Windows** (basic support)
-
-## 📝 License
-
-MIT
+- GitHub: [@Wuradzi](https://github.com/Wuradzi)
+- Telegram: [Будь ласка](https://t.me/wuradzi)
 
 ---
 
-Made for Ukrainian users 🇺🇦
+**Останнє оновлення:** Лютий 2026
+**Версія:** 2.0.0 (з модульною системою навичок)
