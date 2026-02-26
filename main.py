@@ -1,58 +1,54 @@
 #!/usr/bin/env python3
-"""
-ValleRa - Ukrainian Voice Assistant with Hotword Detection
-Run with: python main.py          # Normal mode (say "Валєра" each time)
-Run with: python main_hotword.py   # Always listening mode (background hotword)
-"""
+import os
+import sys
+
+# ГЛУШНИК ALSA
+from ctypes import *
+try:
+    ERROR_HANDLER_FUNC = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
+    def py_error_handler(filename, line, function, err, fmt): pass
+    c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
+    asound = cdll.LoadLibrary('libasound.so.2')
+    asound.snd_lib_error_set_handler(c_error_handler)
+except: pass
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
+
 import config
 from core.listen import Listener
 from core.speak import VoiceEngine
 from core.processor import CommandProcessor
 from hotword_detector import HotwordDetector
 import colorama
-from colorama import Fore, Style
+from colorama import Fore
 import time 
 import platform
-import os
-import sys
-import psutil
 import subprocess
 import logging
-from datetime import datetime
 from contextlib import contextmanager
-import shutil
 import signal
+import re
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('valera.log'),
-        logging.StreamHandler()
-    ]
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.FileHandler('valera.log')])
 logger = logging.getLogger(__name__)
-
 colorama.init(autoreset=True)
 
 CONVERSATION_TIMEOUT = 60
 EXTEND_TIMEOUT = 45
 
 def cleanup_audio_cache():
-    """Очищує кеш аудіо файлів після завершення роботи."""
     cache_dir = "audio_cache"
     if os.path.exists(cache_dir):
         try:
-            shutil.rmtree(cache_dir)
-            logger.info(f"✅ Кеш аудіо очищено: {cache_dir}")
-            print(Fore.GREEN + f"✅ Кеш аудіо очищено")
-        except Exception as e:
-            logger.error(f"⚠️ Помилка очистки кешу: {e}")
-            print(Fore.YELLOW + f"⚠️ Не вдалося очистити кеш: {e}")
+            deleted_count = 0
+            for filename in os.listdir(cache_dir):
+                if re.match(r'^[a-f0-9]{16}\.mp3$', filename):
+                    os.remove(os.path.join(cache_dir, filename))
+                    deleted_count += 1
+            if deleted_count > 0:
+                print(Fore.GREEN + f"✅ Очищено {deleted_count} тимчасових аудіофайлів")
+        except: pass
 
 def signal_handler(sig, frame):
-    """Обробник сигналу для коректного завершення."""
     print(Fore.RED + "\n🛑 Вихід...")
     cleanup_audio_cache()
     sys.exit(0)
@@ -65,135 +61,78 @@ def ignore_stderr():
         sys.stderr.flush()
         os.dup2(devnull, 2)
         os.close(devnull)
-        try:
-            yield
+        try: yield
         finally:
             os.dup2(old_stderr, 2)
             os.close(old_stderr)
-    except Exception:
-        yield
+    except: yield
 
 def get_active_window():
     try:
-        result = subprocess.run(['xdotool', 'getactivewindow', 'getwindowname'], 
-                             capture_output=True, text=True, timeout=1)
-        if result.returncode == 0:
-            name = result.stdout.strip()
-            if name and name != "N/A":
-                if len(name) > 40:
-                    name = name[:37] + "..."
-                return name
-        result = subprocess.run(['xdotool', 'getactivewindow', 'getwindowpid'], 
-                             capture_output=True, text=True, timeout=1)
-        if result.returncode == 0:
-            pid = result.stdout.strip()
-            try:
-                proc = psutil.Process(int(pid))
-                return proc.name()
-            except:
-                pass
-    except:
-        pass
+        res = subprocess.run(['xdotool', 'getactivewindow', 'getwindowname'], capture_output=True, text=True, timeout=1)
+        if res.returncode == 0 and res.stdout.strip() and res.stdout.strip() != "N/A": return res.stdout.strip()[:37] + "..."
+    except: pass
     return None
 
-def main_hotword():
-    """Main function with always-listening hotword mode."""
-    os_name = platform.system()
-    
-    # Регистрируем обработчик сигнала
+def main():
     signal.signal(signal.SIGINT, signal_handler)
-    
     print(Fore.CYAN + "=" * 50)
-    print(Fore.CYAN + f"🚀 ValleRa (Hotword Mode)")
-    print(Fore.CYAN + f"📍 {os_name} | Always Listening")
+    print(Fore.CYAN + f"🚀 {config.NAME} | OS: {platform.system()}")
     print(Fore.CYAN + "=" * 50)
     
-    # Initialize hotword detector
-    print(Fore.YELLOW + "\n🎤 Ініціалізую гаряче слово...")
-    hotword = HotwordDetector()
+    with ignore_stderr():
+        hotword = HotwordDetector()
+        listener = Listener()
+        voice = VoiceEngine()
     
-    try:
-        with ignore_stderr():
-            listener = Listener()
-            voice = VoiceEngine()
-        
-        brain = CommandProcessor(voice, listener)
-        
-        voice.say(f"{config.NAME} на зв'язку в режимі гарячого слова!")
-        logger.info("ValleRa initialized in hotword mode")
-        
-        # Start hotword detection
+    brain = CommandProcessor(voice, listener)
+    
+    with ignore_stderr():
+        voice.say(f"{config.NAME} на зв'язку!")
         hotword.start()
-        
-        print(Fore.GREEN + "\n✅ ValleRa готова!")
-        print(Fore.BLUE + "💡 Скажи 'Валєра' для активації (або Ctrl+C для виходу)")
-        print()
-        
-        conversation_active = False
-        last_interaction_time = 0
-        
-        while True:
-            try:
-                current_time = time.time()
-                time_passed = current_time - last_interaction_time
-                is_conversation = time_passed < CONVERSATION_TIMEOUT
-                time_left = max(0, int(CONVERSATION_TIMEOUT - time_passed))
+    
+    print(Fore.GREEN + f"\n✅ Готово! Скажи '{config.TRIGGER_WORDS[0]}' для активації.")
+    
+    conversation_active = False
+    last_interaction_time = 0
+    
+    while True:
+        try:
+            time_passed = time.time() - last_interaction_time
+            is_conversation = time_passed < CONVERSATION_TIMEOUT
+            
+            if conversation_active:
+                if not is_conversation:
+                    conversation_active = False
+                    print(Fore.BLUE + "\n💤 Перехід в режим очікування...")
+                    continue
                 
-                if is_conversation:
-                    status = f"👂 Слухаю... ({time_left}с)"
-                else:
-                    status = "💤 Очікування 'Валєра'..."
+                with ignore_stderr():
+                    user_input = listener.listen()
                 
-                print(Fore.WHITE + status)
-                
-                if conversation_active:
-                    # Listen for commands
-                    with ignore_stderr():
-                        user_input = listener.listen()
-                    
-                    if user_input:
-                        text = user_input.lower()
-                        triggers = config.TRIGGER_WORDS
+                if user_input:
+                    text = user_input.lower()
+                    if any(t in text for t in config.TRIGGER_WORDS) or is_conversation:
+                        print(f"\n{Fore.WHITE}🗣️ Почув: {user_input}")
+                        win = get_active_window()
+                        if win: print(Fore.CYAN + f"   📱 {win}")
+                        print(Fore.YELLOW + "⚡ Обробка...")
                         
-                        has_trigger = any(trigger in text for trigger in triggers)
-                        
-                        if has_trigger or is_conversation:
-                            print(Fore.GREEN + f"\n🗣️ {user_input}")
-                            
-                            active_window = get_active_window()
-                            if active_window:
-                                print(Fore.CYAN + f"   📱 {active_window}")
-                            
-                            print(Fore.YELLOW + "⚡ Обробка...")
-                            
+                        with ignore_stderr():
                             brain.process(text)
-                            
-                            last_interaction_time = time.time()
-                            print(Fore.MAGENTA + f"⏳ Діалог ще {EXTEND_TIMEOUT}с")
-                            conversation_active = True
-                else:
-                    # Wait for hotword
-                    if hotword.wait_for_wake():
-                        print(Fore.GREEN + "\n🔔 ВАЛЕРА!")
-                        voice.say("Слухаю!")
-                        conversation_active = True
-                        last_interaction_time = time.time()
-                        hotword.clear_wake()
                         
-            except KeyboardInterrupt:
-                print(Fore.RED + "\n🛑 Вихід...")
-                cleanup_audio_cache()
-                break
-            except Exception as e:
-                logger.error(f"Error: {e}")
-                print(Fore.RED + f"⚠️ Помилка: {e}")
-        
-        hotword.stop()
-        
-    except Exception as e:
-        print(Fore.RED + f"❌ Помилка ініціалізації: {e}")
-        cleanup_audio_cache()
-        return
+                        last_interaction_time = time.time()
+            else:
+                if hotword.wait_for_wake():
+                    print(Fore.GREEN + "\n🔔 АКТИВАЦІЯ!")
+                    with ignore_stderr(): voice.say("Слухаю!")
+                    conversation_active = True
+                    last_interaction_time = time.time()
+                    hotword.clear_wake()
+        except KeyboardInterrupt:
+            signal_handler(signal.SIGINT, None)
+        except Exception as e:
+            print(Fore.RED + f"\n⚠️ Помилка: {e}")
 
 if __name__ == "__main__":
-    main_hotword()
+    main()

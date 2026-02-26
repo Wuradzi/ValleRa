@@ -1,4 +1,3 @@
-python-dotenv
 SpeechRecognition
 requests
 pyaudio
@@ -14,7 +13,5 @@ Pillow
 duckduckgo_search
 geopy
 thefuzz
-ollama
 pyperclip
-pytest
-googletrans
+python-dotenv
