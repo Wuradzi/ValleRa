@@ -8,15 +8,17 @@ ValleRa is a Ukrainian-speaking AI voice assistant for controlling your computer
 - **Always Listening Mode** — Background hotword detection (optional)
 - **Program Launcher** — Opens any installed application
 - **Web Search** — Searches Google, YouTube, and DuckDuckGo
-- **Weather** — Current weather conditions
+- **Weather** — Current weather conditions and multi-day forecasts
 - **Python Code Execution** — AI can write and run Python code
 - **System Commands** — Volume control, screenshots, lock screen
 - **Vision** — Screenshots analyzed by AI
 - **Window Awareness** — Knows which app you're using
 - **Memory** — Remembers user data between sessions
-- **Notes** — Quick note taking
-- **Timer** — Voice-controlled timers
+- **Notes** — Quick note-taking with history and clearing options
+- **Timer** — Voice-controlled timers with automatic alerts
 - **Calculator** — Voice math calculations
+- **Process Management** — Lists active processes
+- **Translation** — Translates text between languages and stores history
 
 ## 🚀 Quick Start
 
@@ -98,6 +100,11 @@ CONVERSATION_TIMEOUT = 60           # Seconds in conversation mode
 | "Валєра, буди" | Wake from sleep |
 | "Валєра, запам'ятай ключ: значення" | Store in memory |
 | "Валєра, що ти знаєш?" | Recall stored memory |
+| "Валєра, нотатки" | Show notes |
+| "Валєра, переведи привіт на англійську" | Translate text |
+| "Валєра, які процеси?" | List active processes |
+| "Валєра, таймер 5 хвилин" | Set a timer |
+| "Валєра, порахуй 10+5" | Simple calculator |
 
 ## 🐍 Python Code Execution
 
