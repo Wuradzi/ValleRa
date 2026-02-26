@@ -106,15 +106,24 @@ def _save_memory(data):
 def remember_data(text, voice=None, listener=None):
     """Запам'ятовує дані. Формат: 'ключ: значення' або 'ключ = значення'"""
     try:
-        if ":" in text:
-            key, value = text.split(":", 1)
-        elif "=" in text:
-            key, value = text.split("=", 1)
+        # Видаляємо команду
+        clean = text.lower()
+        for cmd in ["запам'ятай", "запам'ятати", "запиши", "запиши"]:
+            clean = clean.replace(cmd, "", 1).strip()
+        
+        # Шукаємо розділювач
+        if ":" in clean:
+            key, value = clean.split(":", 1)
+        elif "=" in clean:
+            key, value = clean.split("=", 1)
         else:
             return "Використай формат: 'запам'ятай ключ: значення'"
         
         key = key.strip().lower()
         value = value.strip()
+        
+        if not key or not value:
+            return "Ключ і значення не можуть бути пусті."
         
         memory = _load_memory()
         memory[key] = value

@@ -1,8 +1,17 @@
 # core/ai_brain.py
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    print("⚠️ Google Genai не встановлено. Деякі функції недоступні.")
+    genai = None
+    types = None
+
 import config
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 from collections import deque
 import platform 
 import os
@@ -11,6 +20,13 @@ import hashlib
 
 class AIBrain:
     def __init__(self):
+        if not genai or not config.GOOGLE_API_KEY:
+            print("⚠️ Google Genai API не налаштований. Режим без AI.")
+            self.client = None
+            self.main_model = "offline"
+            self.vision_model = "offline"
+            return
+            
         self.client = genai.Client(api_key=config.GOOGLE_API_KEY)
         
         self.main_model = config.MAIN_MODEL

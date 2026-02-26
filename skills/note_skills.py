@@ -12,9 +12,11 @@ NOTES_FILE = os.path.expanduser("~/.valera_notes.txt")
 def add_note(text, voice=None, listener=None):
     """Додає нотатку: 'запиши нотатку купити хліб'"""
     note = text.lower()
-    ignore = ["запиши", "нотатку", "нотатка", "замітка", "додай", "запам'ятай"]
+    ignore = ["запиши", "нотатку", "нотатка", "замітка", "додай", "запам'ятай", "додай нотатку"]
     for w in ignore:
-        note = note.replace(w, "").strip()
+        note = note.replace(w, " ").strip()
+    
+    note = " ".join(note.split())  # Видаляємо доданкові пробіли
     
     if not note:
         return "Що записати?"
