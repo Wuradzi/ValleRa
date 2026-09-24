@@ -1,0 +1,4 @@
+groq>=0.30
+openai>=1.100
+anthropic>=0.60
+ollama>=0.5

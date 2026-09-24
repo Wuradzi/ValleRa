@@ -1,0 +1,99 @@
+{
+  "performance": {
+    "profile": "fast"
+  },
+  "language": "uk",
+  "assistant_name": "Валера",
+  "confirmation_timeout_seconds": 15,
+  "fuzzy_threshold": 85,
+  "stt": {
+    "model_path": "models/vosk-model-small-uk-v3-small",
+    "sample_rate": 16000,
+    "audio_block_ms": 250,
+    "endpoint_silence_ms": 0,
+    "endpoint_adaptive": false,
+    "refinement_policy": "legacy",
+    "command_confidence_threshold": 0.55,
+    "chat_confidence_threshold": 0.5,
+    "post_tts_pause_seconds": 0.25,
+    "input_device": null,
+    "noise_threshold": 0.015,
+    "whisper": {
+      "enabled": true,
+      "model": "base",
+      "device": "cpu",
+      "compute_type": "int8",
+      "cpu_threads": 2,
+      "beam_size": 5,
+      "silence_ms": 500,
+      "min_confidence": 0.45,
+      "skip_silence": true,
+      "preload": true,
+      "prompt": "",
+      "hotwords": ""
+    }
+  },
+  "tts": {
+    "voice_hint": "Volodymyr",
+    "rate": 185,
+    "volume": 1.0,
+    "output_device": null
+  },
+  "llm": {
+    "order": [
+      "gemini",
+      "groq",
+      "openai",
+      "anthropic",
+      "ollama"
+    ],
+    "timeout_seconds": 10,
+    "total_timeout_seconds": 90,
+    "failures_before_switch": 3,
+    "history_limit": 50,
+    "models": {
+      "gemini": "gemini-3.5-flash-lite",
+      "groq": "openai/gpt-oss-20b",
+      "openai": "gpt-5-mini",
+      "anthropic": "claude-haiku-4-5",
+      "ollama": ""
+    }
+  },
+  "commands": {
+    "natural_actions": true,
+    "llm_interpretation": true,
+    "interpretation_timeout_seconds": 12
+  },
+  "security": {
+    "dynamic_code_enabled": false,
+    "pentest": {
+      "enabled": true,
+      "max_hosts": 256,
+      "connect_timeout_seconds": 1.0,
+      "scan_timeout_seconds": 180.0,
+      "concurrency": 100
+    }
+  },
+  "updates": {
+    "check": true,
+    "github_repository": ""
+  },
+  "logging": {
+    "level": "INFO",
+    "retention_days": 30
+  },
+  "application_aliases": {
+    "браузер": "",
+    "телега": "Telegram",
+    "телеграм": "Telegram",
+    "музика": "Spotify",
+    "код": "Visual Studio Code",
+    "хром": "Chrome",
+    "гугл хром": "Chrome"
+  },
+  "file_search": {
+    "all_local_drives": false,
+    "budget_seconds": 15
+  },
+  "user_directories": []
+}

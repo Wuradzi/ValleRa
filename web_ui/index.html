@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>ValleRa — простір розмови</title>
+  <link rel="icon" href="/avatar.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body data-state="offline" data-playback="false" data-glow="0">
+  <main class="workspace">
+    <section class="presence" aria-label="Голосовий асистент">
+      <div class="portrait" aria-hidden="true">
+        <svg class="face" viewBox="0 0 400 480">
+          <defs>
+            <path id="face-outline" d="M200 37C121 37 66 99 66 185L72 271C78 330 122 385 182 425Q200 438 218 425C278 385 322 330 328 271L334 185C334 99 279 37 200 37Z"/>
+            <linearGradient id="shell" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#292b30"/><stop offset=".5" stop-color="#191b20"/><stop offset="1" stop-color="#0d1015"/></linearGradient>
+            <linearGradient id="rim" x2="1" y2="1"><stop stop-color="#656a71" stop-opacity=".55"/><stop offset=".5" stop-color="#3d4149" stop-opacity=".2"/><stop offset="1" stop-color="#05080d"/></linearGradient>
+            <radialGradient id="sheen" cx=".25" cy=".12" r=".8"><stop stop-color="#808189" stop-opacity=".06"/><stop offset="1" stop-color="#808189" stop-opacity="0"/></radialGradient>
+          </defs>
+          <use class="shell" href="#face-outline" fill="url(#shell)" stroke="url(#rim)" stroke-width="2"/>
+          <use href="#face-outline" fill="url(#sheen)"/>
+          <g class="features">
+            <g class="eyes"><g class="eye left-eye"><rect x="108" y="237" width="65" height="5" rx="2.5"/></g><g class="eye right-eye"><rect x="227" y="237" width="65" height="5" rx="2.5"/></g></g>
+            <g class="mouth-position" transform="translate(0 354)">
+              <path class="mouth-rest" d="M180 0H220"/>
+              <path id="mouth-wave" class="mouth-wave" d="M172 0H228"/>
+              <path id="mouth-echo" class="mouth-echo" d="M172 0H228"/>
+            </g>
+          </g>
+        </svg>
+      </div>
+      <h1 id="status" role="status">З’єднуємося…</h1>
+      <p id="status-detail" class="sr-only">Підключення до локального асистента.</p>
+      <div class="voice-controls">
+        <button id="microphone" class="round-button" disabled aria-pressed="false" title="Увімкнути мікрофон"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/><path class="mic-slash" d="M3 3l18 18"/></svg><span class="sr-only">Увімкнути мікрофон</span></button>
+        <button id="stop" class="round-button" disabled title="Зупинити відповідь та озвучення"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="solid" d="M7 5h3v14H7zm7 0h3v14h-3z"/></svg><span class="sr-only">Зупинити відповідь та озвучення</span></button>
+        <button id="history-toggle" class="round-button" type="button" aria-expanded="false" aria-controls="history-panel" title="Історія розмови"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1 7M4 5v5h5M12 7v5l3 2"/></svg><span class="sr-only">Розгорнути історію</span></button>
+      </div>
+      <p id="mic-detail" class="mic-detail">Стан мікрофона ще невідомий</p>
+      <p id="light-preview-note" class="mic-detail" role="status" hidden>Зразок хвилі · демонстраційні дані без звуку · 3 секунди</p>
+    </section>
+    <section class="conversation" aria-label="Розмова">
+      <section id="agent-task" class="agent-task" hidden aria-label="Завдання агента">
+        <div class="task-heading"><strong id="task-title">Завдання</strong><span id="task-status" role="status"></span><button id="cancel-task" type="button" disabled>Скасувати кроки</button></div>
+        <p id="task-detail"></p><details id="task-details"><summary>План і результати кроків</summary><ol id="task-steps"></ol></details>
+      </section>
+      <div id="banner" role="status" hidden></div>
+      <section id="history-panel" aria-label="Діалог та історія розмови">
+        <header class="conversation-header"><h2>Розмова</h2><button id="new-chat" title="Почати нову розмову з підтвердженням" disabled>Нова розмова ＋</button></header>
+        <div class="messages" id="messages" role="log" aria-label="Повідомлення" aria-live="polite" aria-relevant="additions text" tabindex="0"><div class="empty" id="empty">Тут з’явиться наша розмова.</div></div>
+      </section>
+      <section id="confirmation" class="confirmation" hidden aria-label="Підтвердження операції"><strong>Потрібне твоє рішення</strong><p id="confirmation-text"></p><div><button id="reject">Скасувати</button><button id="accept">Підтверджую</button></div></section>
+      <form id="composer" class="composer"><label for="message" class="sr-only">Твоє повідомлення</label><textarea id="message" rows="1" maxlength="4000" placeholder="Напиши або продиктуй свою думку…" disabled></textarea><button id="send" type="submit" title="Надіслати повідомлення" aria-label="Надіслати повідомлення" disabled>↑</button></form>
+    </section>
+    <button class="about-button" id="about" aria-label="Стан сесії та налаштування" title="Стан сесії та налаштування">···</button>
+  </main>
+  <dialog id="about-dialog">
+    <div class="dialog-heading"><h2>Поточна сесія</h2><button id="close-about" aria-label="Закрити">×</button></div>
+    <div class="session-status"><span>Модель: <strong id="provider">—</strong></span><span id="connection">Підключення</span></div>
+    <button id="pause" disabled>Ⅱ Пауза розмови</button>
+    <p>Можна просити звичайними словами — Валера уточнить і запропонує підтвердити дію. «Команда: …» — резервний явний формат. Enter — надіслати, Shift + Enter — новий рядок.</p>
+    <p>Мікрофон і голос обробляє ValleRa, а не браузер. Текст розмови передається налаштованому LLM-провайдеру. Під час озвучення слухання призупинене.</p>
+    <p>Центральна кнопка зупиняє відповідь, не призупиняє її для продовження й не скасовує локальні дії. «Пауза розмови» не вимикає мікрофон — для цього є окрема кнопка.</p>
+    <p>Закриття вкладки не завершує застосунок і не вимикає мікрофон. Історія цього вікна обмежена сесією; звичайні журнали зберігаються як раніше. Не надсилай секрети в чат.</p>
+    <label class="motion-setting"><input id="motion" type="checkbox" checked> Пульсація світла під час мовлення</label>
+    <label class="motion-setting"><input id="allow-pulse-motion" type="checkbox" checked> Дозволити світлові ефекти попри системне зменшення руху</label>
+    <p id="light-status">Очікування стану підсвічування.</p>
+    <button id="preview-light" type="button">Перевірити світло · 3 с</button>
+    <small>Форма хвилі будується з коротких PCM-фрагментів голосу, яскравість — із рівня звуку. Працює з прямим Windows TTS на типовому виході. Мікрофон та інші програми не записуються. Без свіжих аудіоданих рот залишається лінією. Це згладжене зображення сигналу, не точний осцилограф.</small>
+  </dialog>
+</body>
+</html>

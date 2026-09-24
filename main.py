@@ -1,138 +1,158 @@
-#!/usr/bin/env python3
-import os
-import sys
+from __future__ import annotations
 
-# ГЛУШНИК ALSA
-from ctypes import *
-try:
-    ERROR_HANDLER_FUNC = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
-    def py_error_handler(filename, line, function, err, fmt): pass
-    c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
-    asound = cdll.LoadLibrary('libasound.so.2')
-    asound.snd_lib_error_set_handler(c_error_handler)
-except: pass
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
-
-import config
-from core.listen import Listener
-from core.speak import VoiceEngine
-from core.processor import CommandProcessor
-from hotword_detector import HotwordDetector
-import colorama
-from colorama import Fore
-import time 
-import platform
-import subprocess
+import argparse
+import asyncio
 import logging
-from contextlib import contextmanager
-import signal
-import re
+from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.FileHandler('valera.log')])
-logger = logging.getLogger(__name__)
-colorama.init(autoreset=True)
+from config import ConfigError, load_settings
+from core.console import console_getpass, console_print
+from core.logging_setup import SessionLogging, configure_logging
+from core.single_instance import SingleInstance
+from diagnostics import run_diagnostics
+from services.storage.secret_store import SecretStore
 
-CONVERSATION_TIMEOUT = 60
-EXTEND_TIMEOUT = 45
 
-def cleanup_audio_cache():
-    cache_dir = "audio_cache"
-    if os.path.exists(cache_dir):
-        try:
-            deleted_count = 0
-            for filename in os.listdir(cache_dir):
-                if re.match(r'^[a-f0-9]{16}\.mp3$', filename):
-                    os.remove(os.path.join(cache_dir, filename))
-                    deleted_count += 1
-            if deleted_count > 0:
-                print(Fore.GREEN + f"✅ Очищено {deleted_count} тимчасових аудіофайлів")
-        except: pass
+class ConsoleArgumentParser(argparse.ArgumentParser):
+    def _print_message(self, message, file=None):
+        if message:
+            console_print(message, end="")
 
-def signal_handler(sig, frame):
-    print(Fore.RED + "\n🛑 Вихід...")
-    cleanup_audio_cache()
-    sys.exit(0)
 
-@contextmanager
-def ignore_stderr():
+def parse_args() -> argparse.Namespace:
+    parser = ConsoleArgumentParser(description="ValleRa Voice Assistant")
+    parser.add_argument("--diagnostics", action="store_true")
+    parser.add_argument("--text-only", action="store_true")
+    parser.add_argument("--setup", action="store_true")
+    parser.add_argument("--web-ui", action="store_true", help="Локальний вебінтерфейс")
+    parser.add_argument("--web-port", type=int, default=0, help="Порт UI; 0 — вільний порт")
+    parser.add_argument("--no-browser", action="store_true", help="Не відкривати UI автоматично")
+    parser.add_argument(
+        "--profile",
+        choices=("balanced", "fast", "raspberry_pi"),
+        help="Профіль продуктивності лише для цього запуску",
+    )
+    return parser.parse_args()
+
+
+def unlock_vault(settings) -> SecretStore:
+    vault = SecretStore(settings.paths.data_dir / "secrets.json")
+    if not vault.exists:
+        return vault
+
+    for attempt in range(3):
+        password = console_getpass("Майстер-пароль ValleRa: ")
+        if vault.unlock_with_password(password):
+            print("[SECURITY] Сховище секретів розблоковано.")
+            return vault
+        console_print(f"Неправильний пароль. Спроба {attempt + 1}/3.")
+    console_print("Сховище лишається заблокованим.")
+    return vault
+
+
+async def async_main() -> int:
+    args = parse_args()
+    if not 0 <= args.web_port <= 65535:
+        console_print("Порт має бути від 0 до 65535.")
+        return 2
     try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        old_stderr = os.dup(2)
-        sys.stderr.flush()
-        os.dup2(devnull, 2)
-        os.close(devnull)
-        try: yield
+        settings = load_settings(args.profile)
+    except ConfigError as exc:
+        print(f"[CONFIG] {exc}")
+        console_print("Виправте config.json або відновіть його з резервної копії. Подробиці — у журналі сесії.")
+        return 2
+
+    configure_logging(settings)
+    if args.setup or not settings.paths.config_file.exists():
+        from setup_wizard import run_first_start_wizard
+
+        run_first_start_wizard(settings.paths.project_root)
+        try:
+            settings = load_settings(args.profile)
+        except ConfigError as exc:
+            print(f"[CONFIG] Налаштування не збережено: {exc}")
+            console_print("Налаштування не збережено. Подробиці — у журналі сесії.")
+            return 2
+
+    configure_logging(settings)
+    instance = SingleInstance(settings.paths.data_dir / "valera.lock")
+    if not instance.acquire():
+        console_print("ValleRa вже запущена.")
+        return 2
+
+    try:
+        vault = unlock_vault(settings)
+        if args.diagnostics:
+            return await run_diagnostics(settings, vault)
+
+        from core.metrics import MetricsCollector
+        from core.performance import PerformanceRecorder
+
+        performance = PerformanceRecorder(MetricsCollector(settings.paths.data_dir / "metrics.jsonl"))
+        logging.getLogger("session.lifecycle").info("Performance run_id=%s", performance.run_id)
+        with performance.span("startup.app_imports"):
+            from core.app import ValleRaApp
+        with performance.span("startup.app_construct"):
+            app = ValleRaApp(settings, vault, text_only=args.text_only, performance=performance)
+        try:
+            if args.web_ui:
+                from core.web_ui import LocalWebUI
+                from core.console import console_stream
+                from core.logging_setup import register_secret
+
+                app.web_ui = LocalWebUI(app, args.web_port)
+                # Opening a web panel is not consent to start the microphone.
+                app.microphone_enabled = False
+                app._mic_ready.clear()
+                if app.listener is not None:
+                    app.listener.set_paused(True)
+                url = await app.web_ui.start()
+                register_secret(app.web_ui.token)
+                # Do not persist the local bearer token in session logs.
+                print(f"Вебінтерфейс цієї сесії: {url}", file=console_stream(), flush=True)
+                if not args.no_browser:
+                    import webbrowser
+
+                    try:
+                        await asyncio.to_thread(webbrowser.open, url)
+                    except Exception:
+                        console_print("Відкрийте посилання вебінтерфейсу вручну.")
+            await app.run()
         finally:
-            os.dup2(old_stderr, 2)
-            os.close(old_stderr)
-    except: yield
+            if app.web_ui is not None:
+                await app.web_ui.close()
+        return 0
+    finally:
+        instance.release()
 
-def get_active_window():
+
+def main() -> int:
+    session = SessionLogging(Path(__file__).resolve().parent / "logs" / "sessions")
     try:
-        res = subprocess.run(['xdotool', 'getactivewindow', 'getwindowname'], capture_output=True, text=True, timeout=1)
-        if res.returncode == 0 and res.stdout.strip() and res.stdout.strip() != "N/A": return res.stdout.strip()[:37] + "..."
-    except: pass
-    return None
+        with session:
+            console_print(f"Журнал сесії: {session.path}")
+            try:
+                exit_code = asyncio.run(async_main())
+            except KeyboardInterrupt:
+                logging.getLogger("session.lifecycle").info("Shutdown requested: Ctrl+C")
+                console_print("\nValleRa завершено.")
+                return 0
+            logging.getLogger("session.lifecycle").info("Application exit code: %s", exit_code)
+            return exit_code
+    except KeyboardInterrupt:
+        console_print("\nValleRa завершено.")
+        return 0
+    except Exception:
+        # The context logged the traceback; do not dump it into the dialogue.
+        if session.path.exists():
+            console_print(f"ValleRa зупинено через помилку. Подробиці: {session.path}")
+        else:
+            console_print("Не вдалося створити журнал сесії. Перевірте доступ до logs/sessions і вільне місце.")
+        return 1
 
-def main():
-    signal.signal(signal.SIGINT, signal_handler)
-    print(Fore.CYAN + "=" * 50)
-    print(Fore.CYAN + f"🚀 {config.NAME} | OS: {platform.system()}")
-    print(Fore.CYAN + "=" * 50)
-    
-    with ignore_stderr():
-        hotword = HotwordDetector()
-        listener = Listener()
-        voice = VoiceEngine()
-    
-    brain = CommandProcessor(voice, listener)
-    
-    with ignore_stderr():
-        voice.say(f"{config.NAME} на зв'язку!")
-        hotword.start()
-    
-    print(Fore.GREEN + f"\n✅ Готово! Скажи '{config.TRIGGER_WORDS[0]}' для активації.")
-    
-    conversation_active = False
-    last_interaction_time = 0
-    
-    while True:
-        try:
-            time_passed = time.time() - last_interaction_time
-            is_conversation = time_passed < CONVERSATION_TIMEOUT
-            
-            if conversation_active:
-                if not is_conversation:
-                    conversation_active = False
-                    print(Fore.BLUE + "\n💤 Перехід в режим очікування...")
-                    continue
-                
-                with ignore_stderr():
-                    user_input = listener.listen()
-                
-                if user_input:
-                    text = user_input.lower()
-                    if any(t in text for t in config.TRIGGER_WORDS) or is_conversation:
-                        print(f"\n{Fore.WHITE}🗣️ Почув: {user_input}")
-                        win = get_active_window()
-                        if win: print(Fore.CYAN + f"   📱 {win}")
-                        print(Fore.YELLOW + "⚡ Обробка...")
-                        
-                        with ignore_stderr():
-                            brain.process(text)
-                        
-                        last_interaction_time = time.time()
-            else:
-                if hotword.wait_for_wake():
-                    print(Fore.GREEN + "\n🔔 АКТИВАЦІЯ!")
-                    with ignore_stderr(): voice.say("Слухаю!")
-                    conversation_active = True
-                    last_interaction_time = time.time()
-                    hotword.clear_wake()
-        except KeyboardInterrupt:
-            signal_handler(signal.SIGINT, None)
-        except Exception as e:
-            print(Fore.RED + f"\n⚠️ Помилка: {e}")
 
 if __name__ == "__main__":
-    main()
+    exit_code = main()
+    # Do not surface a normal shutdown as SystemExit in IDE debuggers.
+    if exit_code:
+        raise SystemExit(exit_code)
