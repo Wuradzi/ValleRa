@@ -630,6 +630,12 @@ def positive_timeout(value: str) -> float:
 
 
 def main(argv=None) -> int:
+    # The parent runner prints Ukrainian before starting its UTF-8 worker.
+    # Windows CI pipes may otherwise default to cp1252, even on Python 3.12.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="backslashreplace")
     argv = list(sys.argv[1:] if argv is None else argv)
     probe_args = []
     if "--" in argv:
@@ -705,6 +711,27 @@ def main(argv=None) -> int:
 
 class TesterChecks(unittest.TestCase):
     """The tester tests itself here; no extra per-module runner file is needed."""
+
+    def test_parent_output_supports_ukrainian_on_cp1252_ci(self):
+        output, errors = io.BytesIO(), io.BytesIO()
+        stdout = io.TextIOWrapper(output, encoding="cp1252")
+        stderr = io.TextIOWrapper(errors, encoding="cp1252")
+        try:
+            with patch.object(sys, 'stdout', stdout), patch.object(sys, 'stderr', stderr):
+                self.assertEqual(main(['--list']), 0)
+                print('Помилка перевірки', file=sys.stderr)
+                stdout.flush()
+                stderr.flush()
+            self.assertIn('Голос', output.getvalue().decode('utf-8'))
+            self.assertIn('Помилка', errors.getvalue().decode('utf-8'))
+        finally:
+            stdout.close()
+            stderr.close()
+
+    def test_parent_supports_in_memory_capture_without_reconfigure(self):
+        with patch.object(sys, 'stdout', io.StringIO()) as output:
+            self.assertEqual(main(['--list']), 0)
+            self.assertIn('Голос', output.getvalue())
 
     def test_menu_names_numbers_and_deduplication(self):
         self.assertEqual(menu_selection("1, llm 1"), ["voice", "llm"])
