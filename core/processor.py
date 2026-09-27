@@ -101,12 +101,41 @@ class CommandProcessor:
             return True
         return False
 
-    async def process(self, command: str, confirm, source: str = "voice") -> SkillResult:
+    async def process(self, command: str, confirm, source: str = "voice", *, allow_actions=True,
+                      incomplete_input=False) -> SkillResult:
         started = time.perf_counter()
         raw_text = command.strip()
         normalized = self._normalize(raw_text)
         state = self.services["state"]
         mode = state.get("mode", "chat")
+        if not allow_actions and not STOP_SPEECH.fullmatch(raw_text):
+            # STT continuation is context, never authority for a tool or a pending
+            # selection. Require a fresh complete request before normal approval.
+            self._natural_pending = None
+            if self.conversation_paused:
+                return SkillResult(True, "", {"command_type": "conversation_paused"})
+            if incomplete_input:
+                return SkillResult(True, "Схоже, фраза обірвалася. Повторіть її повністю, будь ласка.",
+                                   {"command_type": "fragment_clarify"})
+            notice = "Почув фразу частинами. Повторіть повне прохання про дію; нічого не виконано."
+            if mode != "chat" or COMMAND_PREFIX.match(raw_text):
+                return SkillResult(True, notice, {"command_type": "fragment_clarify"})
+            web = self.services.get("web_answers")
+            task = asyncio.create_task(self.llm_manager.converse(
+                raw_text, self.services["memory"].relevant(normalized),
+                enabled_skills=self.services.get("enabled_skills", set()),
+                web_context=web.dialogue_context() if web is not None else None))
+            self._chat_task = task
+            try:
+                turn = await task
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise
+                return SkillResult(True, "", {"command_type": "chat_interrupted"})
+            finally:
+                self._chat_task = None
+            return SkillResult(True, turn.response if turn.kind in {"chat", "clarify"} else notice,
+                               {"command_type": "fragment_chat" if turn.kind == "chat" else "fragment_clarify"})
         success = True
         provider = "local"
         command_match = COMMAND_PREFIX.match(raw_text)
@@ -348,6 +377,17 @@ class CommandProcessor:
             source=source,
         )
         return result
+
+    def stt_scoped_reply(self, text):
+        """Read-only STT hint; never consumes or authorizes the pending task."""
+        pending = self._natural_pending
+        if not (pending and time.monotonic() < pending['expires']
+                and pending.get('tool') in {'open_app', 'window_control'}
+                and short_clarification(text) and not direct_request(voice_request(text), '')):
+            return False
+        name = application_name_reply(text)
+        exact = getattr(self.services.get('apps'), 'has_exact_name', None)
+        return bool(name and callable(exact) and exact(name))
 
     async def _natural_turn(self, text, normalized, context, web_context):
         pending = self._natural_pending

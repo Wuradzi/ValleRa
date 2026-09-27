@@ -14,11 +14,14 @@ import numpy as np
 from vosk import SetLogLevel
 
 from core.models import RecognitionResult
+from core.confirmation import ConfirmationService
 from core.performance import DISABLED_PERFORMANCE, TurnTiming
 from core.suppress_stderr import suppress_native_stderr
 from services.audio.whisper_process import ProcessWhisperRecognizer
 from services.audio.activity import SpeechEnergyGate
 from services.audio.endpoint import QuietEndpoint
+from services.audio.refinement import RefinementWait
+from core.natural_turn import direct_request, voice_request
 
 logger = logging.getLogger(__name__)
 SetLogLevel(-1)
@@ -47,6 +50,8 @@ class VoskListener:
         self.capture_active = threading.Event()
         self.whisper = ProcessWhisperRecognizer(settings)
         self.performance = DISABLED_PERFORMANCE
+        self._refinement_wait = RefinementWait()
+        self.scoped_reply = lambda text: False
 
     def interrupt(self) -> None:
         self._interrupt.set()
@@ -107,6 +112,12 @@ class VoskListener:
                 self._resolved_device = device
                 self._resolved_sample_rate = sample_rate
                 timing = result.timing
+                fragmented = result.fragmented
+                incomplete = result.incomplete
+                truncated = result.capture_truncated
+                selective = getattr(self.settings, 'stt_selective_whisper_enabled', False)
+                refine, reason, elapsed, outcome = False, 'confirmation_context' if grammar else 'disabled', 0, 'skip'
+                unsafe_refinement = False
                 if (
                     grammar is None
                     and self.whisper.enabled
@@ -119,13 +130,49 @@ class VoskListener:
                     )
                     if refine:
                         with self.performance.span("stt.whisper_refinement"):
-                            refined = self.whisper.transcribe(pcm, sample_rate)
+                            if selective:
+                                refined, outcome, elapsed = self._refinement_wait.run(
+                                    self.whisper, pcm, sample_rate,
+                                    self.settings.stt_whisper_soft_budget_ms,
+                                    self.settings.stt_whisper_hard_budget_ms,
+                                    lambda: self._closed.is_set() or self._interrupt.is_set() or self._paused.is_set())
+                            else:
+                                refined = self.whisper.transcribe(pcm, sample_rate)
+                        unsafe_refinement = selective and (
+                            not refined.text.strip() or not math.isfinite(refined.confidence)
+                            or refined.confidence < self.settings.stt_whisper_min_confidence
+                            or outcome != 'done')
                         result = self._select_result(result, refined)
+                        if getattr(self.settings, 'stt_endpoint_adaptive', False):
+                            incomplete = QuietEndpoint.possible_fragment(result.text)
+                            fragmented = incomplete or truncated
                     else:
                         self.whisper.note_skip(reason)
+                if unsafe_refinement:
+                    # Reuse the existing tool-free fragment path, even when an
+                    # action hint was missed. A timeout never grants execution.
+                    fragmented = True
+                    incomplete = incomplete or self._action_hint(result.text) or not (
+                        result.text.strip() and math.isfinite(result.confidence)
+                        and result.confidence >= self.settings.stt_chat_confidence_threshold)
+                if selective:
+                    logger.info('whisper_refinement_decision=%s whisper_refinement_reason=%s '
+                                'whisper_refinement_ms=%s whisper_refinement_timeout=%s '
+                                'whisper_skipped_reason=%s stt_final_engine=%s stt_fast_path=%s outcome=%s',
+                                'run' if refine else 'skip', reason, round(elapsed),
+                                str(outcome == 'timeout').lower(), reason if not refine else 'none',
+                                result.engine, str(not refine and result.engine == 'vosk').lower(), outcome)
+                if refine and getattr(self.settings, 'stt_endpoint_adaptive', False):
+                    logger.info('STT fragment final: reassessed=True engine=%s incomplete=%s '
+                                'action_eligible=%s fragment_resolution=%s', result.engine, incomplete,
+                                not fragmented and result.engine != 'conflict',
+                                'clarify' if fragmented or result.engine == 'conflict' else 'released')
                 if self._closed.is_set() or self._interrupt.is_set():
                     return RecognitionResult("", 0.0, "interrupted")
                 result.timing = timing
+                result.fragmented = fragmented
+                result.incomplete = incomplete
+                result.capture_truncated = truncated
                 if timing is not None:
                     timing.mark("recognition_ready")
                 return result
@@ -190,6 +237,9 @@ class VoskListener:
 
         audio_queue = queue.Queue()
         model = self._get_model()
+        confirmation_capture = grammar == ConfirmationService.GRAMMAR
+        if confirmation_capture:
+            grammar = ConfirmationService.recognition_grammar(model)
         recognizer = (
             KaldiRecognizer(
                 model,
@@ -204,9 +254,17 @@ class VoskListener:
         adaptive_endpoint = getattr(self.settings, "stt_endpoint_adaptive", False)
         # Confirmation grammars retain native timing. Partial hypotheses never
         # become executable text: flush the decoder before normal STT routing.
-        endpoint = (QuietEndpoint(sample_rate, endpoint_ms, adaptive=adaptive_endpoint)
-                    if endpoint_ms and grammar is None and self.whisper.enabled and self.whisper.status()[0]
+        endpoint = (QuietEndpoint(sample_rate, endpoint_ms or 1200, adaptive=adaptive_endpoint)
+                    if grammar is None and (adaptive_endpoint or
+                        (endpoint_ms and self.whisper.enabled and self.whisper.status()[0]))
                     else None)
+        segments = []
+        native_end = None
+
+        def combined(payload):
+            parts = segments + ([payload] if payload.get('text', '').strip() else [])
+            return {'text': ' '.join(part['text'].strip() for part in parts),
+                    'result': [word for part in parts for word in part.get('result', [])]}
         captured = bytearray()
         observed_peak = 0
         speech_observed = False
@@ -214,7 +272,8 @@ class VoskListener:
             0.0025,
             min(0.08, float(self.settings.noise_threshold) * 0.75),
         )
-        energy_gate = SpeechEnergyGate(sample_rate, speech_threshold)
+        energy_gate = SpeechEnergyGate(sample_rate, speech_threshold,
+                                      window_ms=80 if confirmation_capture else 250)
 
         def callback(indata, frames, time_info, status):
             nonlocal speech_observed
@@ -229,10 +288,37 @@ class VoskListener:
 
         last_block_at = None
 
+        def log_fragment_resolution(resolution):
+            if endpoint is None or not adaptive_endpoint:
+                return
+            endpoint.wait_expired(time.monotonic())
+            actual = endpoint.wait_actual_ms
+            logger.info('STT fragment wait: fragment_wait_target_ms=%s fragment_wait_actual_ms=%s '
+                        'fragment_wait_overshoot_ms=%s fragment_resolution=%s',
+                        400 if endpoint.fragment_held else 0, round(actual),
+                        round(max(0, actual - 400)), resolution)
+
         def finish(payload, kind="native"):
+            if self._interrupt.is_set() or self._paused.is_set() or self._closed.is_set():
+                log_fragment_resolution('cancelled')
+                return RecognitionResult('', 0.0, 'interrupted')
             parsed = self._parse(payload)
+            if endpoint is not None and adaptive_endpoint:
+                parsed.capture_truncated = kind == 'timeout'
+                parsed.incomplete = endpoint.possible_fragment(parsed.text)
+                parsed.fragmented = parsed.incomplete or parsed.capture_truncated
+                log_fragment_resolution('clarify' if parsed.incomplete else
+                                        'merged' if endpoint.fragment_merged else 'released')
+                logger.info('STT continuation: held=%s merged=%s standalone=%s added_ms=%s action_eligible=%s',
+                            endpoint.fragment_held, endpoint.fragment_merged,
+                            endpoint.fragment_held and not endpoint.fragment_merged,
+                            round(endpoint.wait_actual_ms), not parsed.fragmented)
+                self.performance.record('stt.continuation_window', endpoint.wait_actual_ms)
+            logger.info('STT effective endpoint: adaptive=%s threshold_ms=%s',
+                        bool(endpoint is not None and endpoint.adaptive),
+                        round(endpoint.required_silence(parsed.text) * 1000 / sample_rate) if endpoint else None)
             logger.info("STT endpoint: kind=%s adaptive=%s block_ms=%s quiet_ms=%s backlog_ms=%s",
-                         kind, adaptive_endpoint, getattr(self.settings, "stt_audio_block_ms", 250),
+                         kind, bool(endpoint is not None and endpoint.adaptive), getattr(self.settings, "stt_audio_block_ms", 250),
                          round((endpoint.processed - endpoint.last_active) * 1000 / sample_rate)
                          if endpoint is not None else None,
                          round(max(0, time.perf_counter() - last_block_at) * 1000)
@@ -266,9 +352,14 @@ class VoskListener:
         ), self._capture_state():
             while time.monotonic() - started < timeout_seconds:
                 if self._interrupt.is_set() or self._paused.is_set():
+                    log_fragment_resolution('cancelled')
                     return RecognitionResult("", 0.0, "interrupted"), bytes(captured)
+                if endpoint is not None and endpoint.wait_expired(time.monotonic()):
+                    return finish(combined(json.loads(recognizer.FinalResult())), 'fragment_deadline'), bytes(captured)
                 try:
-                    data, last_block_at = audio_queue.get(timeout=0.25)
+                    wait = min(.25, max(0, endpoint.hold_deadline - time.monotonic())) if (
+                        endpoint is not None and endpoint.hold_deadline is not None) else .25
+                    data, last_block_at = audio_queue.get(timeout=wait)
                 except queue.Empty:
                     continue
                 captured.extend(data)
@@ -290,18 +381,45 @@ class VoskListener:
                 if recognizer.AcceptWaveform(data):
                     result = json.loads(recognizer.Result())
                     parsed = self._parse(result)
+                    if confirmation_capture and parsed.text and not speech_observed:
+                        logger.info("confirmation_capture_rejected=below_energy_threshold window_ms=80")
                     if parsed.text and speech_observed:
-                        return finish(result), bytes(captured)
+                        if endpoint is None or not adaptive_endpoint:
+                            return finish(result), bytes(captured)
+                        if segments:
+                            endpoint.continuation(time.monotonic())
+                        segments.append(result)
+                        words = result.get('result', [])
+                        end = words[-1].get('end') if words else None
+                        native_end = (round(end * sample_rate) if isinstance(end, (int, float))
+                                      and math.isfinite(end) and 0 <= end * sample_rate <= endpoint.consumed
+                                      else endpoint.consumed - round(sample_rate * .9))
+                        partial = ''
+                    else:
+                        partial = ''
                 elif endpoint is not None:
                     partial = json.loads(recognizer.PartialResult()).get("partial", "")
-                    if (endpoint.ready(partial) and (adaptive_endpoint or not self.FAST_CHAT.fullmatch(partial))
-                            and speech_observed and audio_queue.empty()):
-                        result = json.loads(recognizer.FinalResult())
+                else:
+                    partial = ''
+                if endpoint is not None:
+                    if partial and (segments or endpoint.hold_at is not None):
+                        if segments or partial.strip() != endpoint.partial:
+                            endpoint.continuation(time.monotonic())
+                        native_end = None
+                    text = ' '.join([part['text'].strip() for part in segments] + ([partial] if partial else []))
+                    native_silence = endpoint.consumed - native_end if native_end is not None else None
+                    # Vosk may need another block before its new partial appears.
+                    # Do not close on an old native final over fresh audible speech.
+                    recent_speech = native_end is not None and self._has_speech_energy(
+                        data, sample_rate, float(self.settings.noise_threshold))
+                    if (endpoint.ready(text, native_silence=native_silence, now=time.monotonic()) and (adaptive_endpoint or not self.FAST_CHAT.fullmatch(text))
+                            and not recent_speech and speech_observed and audio_queue.empty()):
+                        result = combined(json.loads(recognizer.FinalResult()))
                         logger.debug("Speech endpoint: quiet pause %s ms (adaptive=%s)",
-                                     round(endpoint.required_silence(partial) * 1000 / sample_rate), adaptive_endpoint)
-                        return finish(result, "quiet"), bytes(captured)
+                                     round(endpoint.required_silence(text) * 1000 / sample_rate), adaptive_endpoint)
+                        return finish(result, "native" if native_end is not None else "quiet"), bytes(captured)
 
-        final_payload = json.loads(recognizer.FinalResult())
+        final_payload = combined(json.loads(recognizer.FinalResult()))
         parsed = self._parse(final_payload)
         if parsed.text and not speech_observed:
             logger.debug(
@@ -402,6 +520,8 @@ class VoskListener:
         # Vosk's threshold is local to this engine, not compared to Whisper's
         # probability. The policy is opt-in and never uses reference phrases.
         return (
+            not getattr(self.settings, 'stt_selective_whisper_enabled', False)
+            and
             getattr(self.settings, "stt_refinement_policy", "legacy") == "vosk_first"
             and result.engine == "vosk"
             and bool(result.text.strip())
@@ -417,6 +537,7 @@ class VoskListener:
     ) -> tuple[bool, str]:
         if (
             self.settings.stt_whisper_skip_silence
+            and not (getattr(self.settings, 'stt_selective_whisper_enabled', False) and result.text.strip())
             and not self._has_speech_energy(
                 pcm,
                 sample_rate,
@@ -426,6 +547,21 @@ class VoskListener:
             return False, "silence"
 
         # Commands still require the existing second-engine prefix check.
+        if getattr(self.settings, 'stt_selective_whisper_enabled', False):
+            if result.fragmented or result.incomplete or result.capture_truncated or QuietEndpoint.possible_fragment(result.text):
+                return True, 'incomplete'
+            words = re.findall(r"[\w’']+", result.text.casefold())
+            if (not words or not result.text.isprintable() or '\ufffd' in result.text
+                    or re.search(r'\b(\w+)(?:\s+\1){2,}\b', result.text, re.I)):
+                return True, 'suspicious_fragment'
+            if not math.isfinite(result.confidence) or not self.settings.stt_vosk_chat_confidence <= result.confidence <= 1:
+                return True, 'low_confidence'
+            if getattr(self, 'scoped_reply', lambda text: False)(result.text):
+                return False, 'scoped_context'
+            if self._action_hint(result.text):
+                return True, 'action_uncertain'
+            return False, 'high_confidence_chat'
+
         if self._prefer_vosk(result) and not self._contains_command_prefix(result.text):
             return False, "vosk-first"
 
@@ -439,6 +575,10 @@ class VoskListener:
             return False, "fast-chat"
 
         return True, ""
+
+    @classmethod
+    def _action_hint(cls, text):
+        return cls._contains_command_prefix(text) or direct_request(voice_request(text), '')
 
     @staticmethod
     def _has_speech_energy(

@@ -154,6 +154,38 @@ class NewConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Синій", contents[1].parts[0].text)
         self.assertTrue(all(c.role == "user" for c in contents[:2]))
 
+    async def test_request_window_preserves_summary_memory_and_disk_history(self):
+        original = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i}"}
+                    for i in range(50)]
+        for limit in (0, 4, 12):
+            with self.subTest(limit=limit):
+                self.manager.settings.history_limit = limit
+                self.manager.history.save({"summary": "Попередня тема", "messages": original})
+                await self.manager.chat("Поточна репліка", memory_context=[{"key": "Колір", "value": "Синій"}])
+                sent = self.provider.chat.await_args.args[0]
+                self.assertIn("Попередня тема", sent[1]["content"])
+                self.assertIn("Синій", sent[2]["content"])
+                self.assertEqual(sent[3:-1], original[-limit:] if limit else [])
+                self.assertEqual(sent[-1]["content"], "Поточна репліка")
+                stored = self.manager.history.load()
+                self.assertEqual(stored["messages"][:50], original)
+                self.assertEqual(len(stored["messages"]), 52)
+                self.assertIn("Попередня тема", stored["summary"])
+                await self.manager.chat("Наступна репліка")
+                self.assertEqual(len(self.manager.history.load()["messages"]), 54)
+                self.assertEqual(self.manager.history.load()["summary"].count("turn 0 |"), 1)
+
+    async def test_empty_optional_contexts_do_not_add_messages(self):
+        for blank in ("", " \n\t"):
+            with self.subTest(blank=repr(blank)):
+                self.manager.history.save({"summary": blank, "messages": []})
+                await self.manager.chat("Привіт", memory_context=[], system_context=blank,
+                                        web_context={}, dialogue_control={})
+                self.assertEqual(self.provider.chat.await_args.args[0], [
+                    {"role": "system", "content": self.manager.system_prompt},
+                    {"role": "user", "content": "Привіт"},
+                ])
+
     async def test_new_dialogue_does_not_silently_exit_special_mode(self):
         self.services["state"]["mode"] = "pentest"
         confirm = AsyncMock(return_value=True)

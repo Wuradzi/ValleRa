@@ -17,6 +17,59 @@ from skills.web import skill as web_skill
 
 
 class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
+    def test_exact_confirmation_semantics_and_uncertainty(self):
+        for text in ('так', 'гаразд', 'підтверджую', ' Так! '):
+            self.assertIs(ConfirmationService._decision(text, .95), True)
+        for text in ('ні', 'скасуй', 'скасувати', 'не треба', 'відмовляюсь'):
+            self.assertIs(ConfirmationService._decision(text, .95), False)
+            self.assertIn(text, ConfirmationService.GRAMMAR)
+        for text in ('можливо', '<UNK>', '<UNK> так', 'не так', 'так ні', 'підтвердити пізніше'):
+            self.assertIsNone(ConfirmationService._decision(text, 1))
+        for score in (.52, 0, float('nan'), float('inf'), 1.1):
+            self.assertIsNone(ConfirmationService._decision('так', score))
+            self.assertIsNone(ConfirmationService._decision('ні', score))
+
+    async def test_uncertain_voice_repeats_then_correlated_negative_cancels(self):
+        service = ConfirmationService(AsyncMock(), timeout_seconds=1)
+        task = asyncio.create_task(service.ask('fixture'))
+        await service.wait_until_requested()
+        self.assertTrue(service.submit('гаразд', service.request_id, confidence=.52))
+        await asyncio.wait_for(service.wait_until_response_processed(), 1)
+        self.assertFalse(task.done())
+        self.assertIn('Не розібрав', service.speak.await_args.args[0])
+        self.assertTrue(service.submit('ні', service.request_id, confidence=.95))
+        self.assertFalse(await asyncio.wait_for(task, 1))
+
+    async def test_old_reply_after_cancel_or_timeout_cannot_approve_new_request(self):
+        for expired in (False, True):
+            confirmation = ConfirmationService(AsyncMock(), timeout_seconds=.01 if expired else 1)
+            old = asyncio.create_task(confirmation.ask('A'))
+            await confirmation.wait_until_requested()
+            old_id = confirmation.request_id
+            if expired:
+                self.assertFalse(await asyncio.wait_for(old, 1))
+            else:
+                old.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await old
+            confirmation.timeout_seconds = 1
+            new = asyncio.create_task(confirmation.ask('B'))
+            try:
+                await confirmation.wait_until_requested()
+                new_id = confirmation.request_id
+                self.assertNotEqual(old_id, new_id)
+                for text in ('так', 'гаразд', 'підтверджую'):
+                    self.assertFalse(confirmation.submit(text, old_id))
+                self.assertFalse(confirmation.submit('ні', old_id, confidence=1))
+                self.assertFalse(confirmation.submit('так'))
+                self.assertTrue(confirmation._responses.empty())
+                self.assertFalse(new.done())
+                self.assertTrue(confirmation.submit('так', new_id))
+                self.assertTrue(await asyncio.wait_for(new, 1))
+            finally:
+                new.cancel()
+                await asyncio.gather(new, return_exceptions=True)
+
     def test_confirmation_grammar_uses_only_model_vocabulary(self):
         self.assertNotIn("[unk]", ConfirmationService.GRAMMAR)
 
@@ -26,7 +79,7 @@ class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
 
         task = asyncio.create_task(confirmation.ask("тест"))
         await confirmation.wait_until_requested()
-        self.assertTrue(confirmation.submit("підтверджує"))
+        self.assertTrue(confirmation.submit("підтверджує", confirmation.request_id))
 
         self.assertTrue(await task)
         self.assertFalse(confirmation.awaiting)
@@ -37,9 +90,9 @@ class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
 
         task = asyncio.create_task(confirmation.ask("тест"))
         await confirmation.wait_until_requested()
-        confirmation.submit("відкрий телеграм")
+        confirmation.submit("відкрий телеграм", confirmation.request_id)
         await asyncio.sleep(0)
-        confirmation.submit("ні")
+        confirmation.submit("ні", confirmation.request_id)
 
         self.assertFalse(await task)
         self.assertGreaterEqual(speak.await_count, 3)
@@ -244,7 +297,7 @@ class AppCommandLoopTests(unittest.IsolatedAsyncioTestCase):
         )
         task = asyncio.create_task(app._command_loop())
         try:
-            await app.command_queue.put(("котра година", "voice", 0.9))
+            await app._enqueue_command("котра година", "voice", 0.9)
             await asyncio.wait_for(app.command_queue.join(), 1)
         finally:
             app.running = False
@@ -259,7 +312,7 @@ class AppCommandLoopTests(unittest.IsolatedAsyncioTestCase):
         app = _command_loop_app(confidence_threshold=0.55)
         task = asyncio.create_task(app._command_loop())
         try:
-            await app.command_queue.put(("команда виграв", "voice", 0.3))
+            await app._enqueue_command("команда виграв", "voice", 0.3)
             await asyncio.wait_for(app.command_queue.join(), 1)
         finally:
             app.running = False
@@ -278,7 +331,7 @@ class AppCommandLoopTests(unittest.IsolatedAsyncioTestCase):
         )
         task = asyncio.create_task(app._command_loop())
         try:
-            await app.command_queue.put(("ти пам'ятаєш люта", "voice", 0.37))
+            await app._enqueue_command("ти пам'ятаєш люта", "voice", 0.37)
             await asyncio.wait_for(app.command_queue.join(), 1)
         finally:
             app.running = False
@@ -295,7 +348,7 @@ class AppCommandLoopTests(unittest.IsolatedAsyncioTestCase):
         app.processor.process = AsyncMock(return_value=SkillResult(True, "Почув вас."))
         task = asyncio.create_task(app._command_loop())
         try:
-            await app.command_queue.put(("як твої справи", "text", 0.0))
+            await app._enqueue_command("як твої справи", "text", 0.0)
             await asyncio.wait_for(app.command_queue.join(), 1)
         finally:
             task.cancel()
@@ -314,7 +367,8 @@ class AppCommandLoopTests(unittest.IsolatedAsyncioTestCase):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-        self.assertEqual(queued, ("як твої справи", "voice", 0.91, None))
+        self.assertEqual(queued[:6], ("як твої справи", "voice", 0.91, None, False, False))
+        self.assertIn(queued[6], app._dispatch_guard.pending)
         self.assertEqual(
             app.listener.listen_once.call_args_list,
             [
@@ -334,7 +388,7 @@ class AppCommandLoopTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(app._command_loop())
         app._tasks = [task]
 
-        await app.command_queue.put(("заверши роботу", "voice", 1.0))
+        await app._enqueue_command("заверши роботу", "voice", 1.0)
         await asyncio.wait_for(task, 1)
 
         self.assertFalse(app.running)

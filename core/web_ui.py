@@ -59,10 +59,10 @@ class LocalWebUI:
             task.cancel()
         await asyncio.gather(*active, return_exceptions=True)
 
-    async def _submit(self, text):
+    async def _submit(self, text, confirmation_id=None):
         try:
             logging.getLogger("session.dialogue").info("[WEB] %s", redact_user_text(text))
-            await self.app._submit_text(text)
+            await self.app._submit_text(text, confirmation_id)
         except Exception:
             logger.exception("Web UI submission failed")
             self.publish("notice", "Повідомлення не вдалося передати. Перевірте журнал сесії.")
@@ -101,7 +101,10 @@ class LocalWebUI:
             if self.submission and not self.submission.done():
                 return 409, {"error": "Попереднє повідомлення ще передається. Зачекайте."}
             # The existing router, confirmation service and command queue own all actions.
-            self.submission = asyncio.create_task(self._submit(text.strip()), name="web-submit")
+            request_id = data.get("request_id")
+            if request_id is not None and not isinstance(request_id, str):
+                return 400, {"error": "Некоректний ID підтвердження."}
+            self.submission = asyncio.create_task(self._submit(text.strip(), request_id), name="web-submit")
         elif action in {"stop", "pause", "resume", "microphone", "confirm", "cancel_task"}:
             return await self.app.web_control(action, data)
         else:

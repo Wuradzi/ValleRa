@@ -61,22 +61,34 @@ class TurnDecoder:
         if self.kind is None:
             self.header += chunk
             if "\n" not in self.header:
-                if len(self.header) > 16:
-                    raise InvalidIntent("missing turn header")
+                if len(self.header) > 16000:
+                    raise InvalidIntent("turn too large")
                 return ""
             header, chunk = self.header.split("\n", 1)
             if header.rstrip("\r") not in {"CHAT", "CLARIFY", "ACTION"}:
-                raise InvalidIntent("unknown turn header")
-            self.kind = header.rstrip("\r").lower()
+                self.kind = "plain"
+                chunk = self.header
+            else:
+                self.kind = header.rstrip("\r").lower()
             self.header = ""
         if len(self.body) + len(chunk) > (4000 if self.kind == "action" else 16000):
             raise InvalidIntent("turn too large")
         self.body += chunk
-        return chunk if self.kind != "action" else ""
+        return chunk if self.kind in {"chat", "clarify"} else ""
 
     def finish(self):
-        if self.kind is None or not self.body.strip():
+        if self.kind is None:
+            self.kind, self.body = "plain", self.header
+            self.header = ""
+        if not self.body.strip():
             raise InvalidIntent("empty turn")
+        if self.kind == "plain":
+            # Inspect the COMPLETE fallback before exposing text. Never run the
+            # legacy mixed-output action recovery on a headerless response.
+            if re.search(r"\b(?:CHAT|CLARIFY|ACTION|tool|arguments|tool_calls?|function_call)\b|[{}\[\]]|```",
+                         self.body, re.I):
+                raise InvalidIntent("mixed control output")
+            return NaturalTurn("chat", safe_dialogue(self.body.strip()))
         if self.kind != "action":
             # Recover ONE complete trailing proposal, never execute a prose promise.
             mixed = re.search(r"\bACTION\s*(\{.*\})\s*$", self.body, re.S)

@@ -13,6 +13,25 @@ from config import (
 
 
 class ConfigTests(unittest.TestCase):
+    def test_selective_refinement_budgets_and_thresholds(self):
+        config = merge_config({})
+        self.assertTrue(config['stt']['selective_whisper_enabled'])
+        self.assertEqual(config['stt']['whisper_hard_budget_ms'], 6000)
+        validate_config(config)
+        for changes in ({'whisper_soft_budget_ms': 0}, {'whisper_hard_budget_ms': 3000},
+                        {'vosk_chat_confidence': float('nan')}, {'selective_whisper_enabled': 'true'}):
+            with self.subTest(changes=changes):
+                broken = merge_config({'stt': changes})
+                with self.assertRaises(ConfigError):
+                    validate_config(broken)
+
+    def test_history_request_default_and_explicit_override(self):
+        example = json.loads((Path(__file__).resolve().parents[1] / "config.example.json").read_text(encoding="utf-8"))
+        self.assertEqual(Settings(ProjectPaths.from_root(Path("."))).history_limit, 12)
+        self.assertEqual(merge_config({})["llm"]["history_limit"], 12)
+        self.assertEqual(example["llm"]["history_limit"], 12)
+        self.assertEqual(merge_config({"llm": {"history_limit": 30}})["llm"]["history_limit"], 30)
+
     def test_default_whisper_base_without_hints_matches_settings_and_example(self):
         config = merge_config({})
         settings = Settings(ProjectPaths.from_root(Path(".")))
@@ -92,4 +111,3 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config["stt"]["whisper"]["preload"])
         self.assertLessEqual(config["security"]["pentest"]["concurrency"], 20)
         self.assertLessEqual(config["security"]["pentest"]["max_hosts"], 64)
-

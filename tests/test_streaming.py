@@ -75,6 +75,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(task.done())
             stages = [call.kwargs["stage"] for call in timing_metrics.record.call_args_list]
             self.assertIn("llm.gemini.first_text", stages)
+            self.assertIn("llm.first_text", stages)
             self.assertIn("response.first_phrase_to_tts_queue", stages)
             self.assertNotIn("llm.gemini.request_including_callbacks", stages)
         finally:
@@ -103,6 +104,38 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("лише частину", result)
         self.assertEqual(result.count("Частина відповіді"), 1)
         self.assertEqual(len(manager.history.load()["messages"]), 2)
+
+    async def test_first_text_metrics_once_and_numeric_for_both_dialogue_paths(self):
+        for natural in (False, True):
+            with self.subTest(natural=natural):
+                captured = []
+
+                async def stream(messages):
+                    captured.extend(messages)
+                    yield ""
+                    if not natural:
+                        yield "  "
+                    yield "CHAT\nПривіт" if natural else "Привіт"
+                    yield "!"
+
+                manager = self.manager(SimpleNamespace(chat_stream=stream))
+                manager.settings.history_limit = 12
+                original = [{"role": "user", "content": f"old {i}"} for i in range(50)]
+                manager.history.save({"summary": "Попередня тема", "messages": original})
+                manager.performance = Mock()
+                manager.performance.span = PerformanceRecorder(enabled=False).span
+                if natural:
+                    result = await manager.converse("Тепер", on_chunk=AsyncMock())
+                    self.assertEqual(result.response, "Привіт!")
+                else:
+                    self.assertEqual(await manager.chat("Тепер", on_chunk=AsyncMock()), "Привіт!")
+                self.assertEqual(captured[2:-1], original[-12:])
+                self.assertIn("Попередня тема", captured[1]["content"])
+                calls = manager.performance.record.call_args_list
+                self.assertEqual([call.args[0] for call in calls], ["llm.gemini.first_text", "llm.first_text"])
+                self.assertEqual(calls[0].args[1], calls[1].args[1])
+                self.assertIsInstance(calls[0].args[1], float)
+                self.assertGreaterEqual(calls[0].args[1], 0)
 
     async def test_guard_applies_before_streamed_action_claim_is_spoken(self):
         async def stream(messages):

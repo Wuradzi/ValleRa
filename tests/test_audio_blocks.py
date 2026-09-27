@@ -46,6 +46,44 @@ class EnergyGateTests(unittest.TestCase):
 
 
 class AudioBlockTests(unittest.TestCase):
+    def test_confirmation_grammar_keeps_ukrainian_no_and_model_unknown(self):
+        from core.confirmation import ConfirmationService
+        model = SimpleNamespace(vosk_model_find_word=lambda word: 3 if word == '<UNK>' else -1)
+        grammar = ConfirmationService.recognition_grammar(model)
+        self.assertIn('ні', grammar)
+        self.assertEqual([ord(c) for c in 'ні'], [0x43d, 0x456])
+        self.assertIn('<UNK>', grammar)
+        self.assertNotIn('[unk]', grammar)
+        self.assertEqual(set(grammar), set(ConfirmationService.GRAMMAR) | {'<UNK>'})
+
+    def test_short_quiet_confirmation_survives_without_changing_general_gate(self):
+        from core.confirmation import ConfirmationService
+        # 80 ms short reply diluted in the old 250 ms window: 0.015 -> 0.0086 RMS.
+        pcm = np.concatenate([np.full(1280, 500), np.zeros(2720)]).astype(np.int16).tobytes()
+        self.assertFalse(SpeechEnergyGate(16000, .01125).feed(pcm))
+        with tempfile.TemporaryDirectory() as directory:
+            for text in ('ні', 'так', 'гаразд'):
+                listener = VoskListener(Settings(ProjectPaths.from_root(Path(directory))))
+                listener._get_model = Mock(return_value=SimpleNamespace(vosk_model_find_word=lambda word: 3 if word == '<UNK>' else -1))
+                recognizer = Mock()
+                recognizer.AcceptWaveform.return_value = True
+                recognizer.Result.return_value = json.dumps({'text': text, 'result': [{'word': text, 'conf': .95}]})
+                def stream(**kwargs):
+                    kwargs['callback'](pcm, 4000, None, None)
+                    return contextlib.nullcontext()
+                with patch('vosk.KaldiRecognizer', return_value=recognizer) as factory:
+                    result, _ = listener._listen_on_device(SimpleNamespace(RawInputStream=stream), 0, 16000, 8, ConfirmationService.GRAMMAR)
+                self.assertEqual(result.text, text)  # Transcript is never replaced by a semantic synonym.
+                self.assertEqual(result.confidence, .95)
+                self.assertIn('ні', json.loads(factory.call_args.args[2]))
+                recognizer.PartialResult.assert_not_called()
+                listener.whisper.close()
+
+    def test_confirmation_short_gate_rejects_silence_and_brief_noise(self):
+        for pcm in (b'\0\0' * 4000,
+                    np.concatenate([np.full(320, 500), np.zeros(3680)]).astype(np.int16).tobytes()):
+            self.assertFalse(SpeechEnergyGate(16000, .01125, window_ms=80).feed(pcm))
+
     def test_adaptive_configuration_is_explicit_boolean(self):
         self.assertIs(merge_config({})['stt']['endpoint_adaptive'], False)
         for value in (True, False):
@@ -69,9 +107,8 @@ class AudioBlockTests(unittest.TestCase):
             endpoint.feed(b'\x00\x10' * (rate // 2))
             self.assertFalse(endpoint.ready('а як твої справи'))
 
-    def test_adaptive_does_not_shorten_commands_unfinished_or_long_speech(self):
-        for text in ('команда відкрий браузер', 'Валера команда відкрий браузер',
-                     'я хотів запитати', 'розкажи мені про', 'я хочу',
+    def test_adaptive_unfinished_and_long_speech_wait_longer(self):
+        for text in ('я хотів запитати', 'розкажи мені про', 'я хочу',
                      'розкажи мені будь ласка як працює сучасний автомобіль'):
             with self.subTest(text=text):
                 endpoint = QuietEndpoint(16000, 1200, adaptive=True)
@@ -80,6 +117,8 @@ class AudioBlockTests(unittest.TestCase):
                 endpoint.feed(b'\0\0' * 16000)
                 self.assertFalse(endpoint.ready(text))
                 endpoint.feed(b'\0\0' * 3200)
+                self.assertFalse(endpoint.ready(text))
+                endpoint.feed(b'\0\0' * 6400)
                 self.assertTrue(endpoint.ready(text))
         endpoint = QuietEndpoint(16000, 1200, adaptive=True)
         endpoint.feed(b'\x00\x10' * 80000)

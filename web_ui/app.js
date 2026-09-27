@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const messages = $("messages");
 let cursor = 0, state = null, connected = false, sending = false, assistantBlock = null;
 let confirmationId = null, dismissedWarning = false;
+let draftConfirmationId;
 let taskId = null, lastTaskJSON = "";
 let playbackExpiry = null;
 let glowExpiry = null, glowSequence = -1;
@@ -261,10 +262,18 @@ async function action(name, fields = {}) {
 async function send(text) {
   if (!connected || sending || !text.trim()) return;
   sending = true; controls();
-  if (await action("message", {text: text.trim()})) $("message").value = "";
+  const requestId = draftConfirmationId === undefined ? confirmationId : draftConfirmationId;
+  if (await action("message", {text: text.trim(), request_id: requestId})) {
+    $("message").value = "";
+    draftConfirmationId = undefined;
+  }
   sending = false; controls(); $("message").focus();
 }
 $("composer").addEventListener("submit", (event) => { event.preventDefault(); send($("message").value); });
+$("message").addEventListener("input", () => {
+  if (draftConfirmationId === undefined) draftConfirmationId = confirmationId;
+  if (!$("message").value) draftConfirmationId = undefined;
+});
 $("message").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send($("message").value); }
 });

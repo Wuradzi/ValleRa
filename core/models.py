@@ -14,6 +14,9 @@ class RecognitionResult:
     confidence: float
     engine: str = "vosk"
     timing: TurnTiming | None = field(default=None, repr=False, compare=False)
+    fragmented: bool = False
+    incomplete: bool = False
+    capture_truncated: bool = False
 
 
 @dataclass(slots=True)

@@ -213,7 +213,7 @@ class TaskIntegrationTests(unittest.IsolatedAsyncioTestCase):
         app.confirmation = SimpleNamespace(ask=AsyncMock())
         task = asyncio.create_task(app._command_loop())
         try:
-            await app.command_queue.put(("другий", "voice", 0.52))
+            await app._enqueue_command("другий", "voice", 0.52)
             await asyncio.wait_for(app.command_queue.join(), 1)
         finally:
             task.cancel()

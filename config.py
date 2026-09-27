@@ -57,6 +57,10 @@ class Settings:
     stt_chat_confidence_threshold: float = 0.5
     stt_post_tts_pause_seconds: float = 0.25
     stt_whisper_enabled: bool = True
+    stt_selective_whisper_enabled: bool = True
+    stt_vosk_chat_confidence: float = 0.85
+    stt_whisper_soft_budget_ms: int = 4000
+    stt_whisper_hard_budget_ms: int = 6000
     stt_whisper_model: str = "base"
     stt_whisper_device: str = "cpu"
     stt_whisper_compute_type: str = "int8"
@@ -82,7 +86,7 @@ class Settings:
     llm_timeout_seconds: int = 10
     llm_total_timeout_seconds: int = 90
     llm_failures_before_switch: int = 3
-    history_limit: int = 50
+    history_limit: int = 12
     command_interpretation_enabled: bool = True
     natural_actions_enabled: bool = True
     command_interpretation_timeout_seconds: int = 12
@@ -126,6 +130,10 @@ def default_config() -> dict[str, Any]:
             "endpoint_silence_ms": 0,
             "endpoint_adaptive": False,
             "refinement_policy": "legacy",
+            "selective_whisper_enabled": True,
+            "vosk_chat_confidence": 0.85,
+            "whisper_soft_budget_ms": 4000,
+            "whisper_hard_budget_ms": 6000,
             "command_confidence_threshold": 0.55,
             "chat_confidence_threshold": 0.5,
             "post_tts_pause_seconds": 0.25,
@@ -157,7 +165,7 @@ def default_config() -> dict[str, Any]:
             "timeout_seconds": 10,
             "total_timeout_seconds": 90,
             "failures_before_switch": 3,
-            "history_limit": 50,
+            "history_limit": 12,
             "models": {
                 "gemini": "gemini-3.5-flash-lite",
                 "groq": "openai/gpt-oss-20b",
@@ -283,6 +291,12 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ConfigError("stt.refinement_policy має бути legacy або vosk_first")
         if type(endpoint_ms) is not int or endpoint_ms not in {0, 1200, 1400, 1600}:
             raise ConfigError("stt.endpoint_silence_ms має бути 0 (штатний Vosk), 1200, 1400 або 1600")
+        if not isinstance(config['stt']['selective_whisper_enabled'], bool):
+            raise ConfigError('stt.selective_whisper_enabled має бути boolean')
+        if not 0.5 <= float(config['stt']['vosk_chat_confidence']) <= 1:
+            raise ConfigError('stt.vosk_chat_confidence має бути від 0.5 до 1')
+        if not 0 < int(config['stt']['whisper_soft_budget_ms']) <= int(config['stt']['whisper_hard_budget_ms']) <= 60000:
+            raise ConfigError('Whisper budgets: 0 < soft <= hard <= 60000 ms')
         if int(config["stt"]["whisper"]["beam_size"]) <= 0:
             raise ConfigError("stt.whisper.beam_size має бути додатним")
         if int(config["stt"]["whisper"]["cpu_threads"]) < 0:
@@ -361,6 +375,10 @@ def load_settings(profile_override: str | None = None) -> Settings:
         stt_endpoint_silence_ms=int(config["stt"]["endpoint_silence_ms"]),
         stt_endpoint_adaptive=config["stt"]["endpoint_adaptive"],
         stt_refinement_policy=str(config["stt"]["refinement_policy"]),
+        stt_selective_whisper_enabled=config['stt']['selective_whisper_enabled'],
+        stt_vosk_chat_confidence=float(config['stt']['vosk_chat_confidence']),
+        stt_whisper_soft_budget_ms=int(config['stt']['whisper_soft_budget_ms']),
+        stt_whisper_hard_budget_ms=int(config['stt']['whisper_hard_budget_ms']),
         stt_command_confidence_threshold=float(
             config["stt"]["command_confidence_threshold"]
         ),

@@ -62,6 +62,7 @@ class ProcessWhisperRecognizer:
             paths=SimpleNamespace(models_dir=settings.paths.models_dir),
         )
         self.enabled = settings.stt_whisper_enabled
+        self._external_budget = getattr(settings, 'stt_selective_whisper_enabled', False)
         self._target = worker_target
         self._process = None
         self._connection = None
@@ -123,7 +124,7 @@ class ProcessWhisperRecognizer:
                         self.performance.record(stage, duration, status="ok" if self._status[0] else "unavailable")
                     self.performance.record(f"whisper.roundtrip_{operation}", (time.perf_counter() - started) * 1000)
                     return result
-                if time.monotonic() >= deadline:
+                if time.monotonic() >= deadline and not (operation == 'transcribe' and self._external_budget):
                     raise TimeoutError("Whisper перевищив 120 секунд")
             raise RuntimeError("Whisper зупинено")
 

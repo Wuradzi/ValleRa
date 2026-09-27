@@ -3,6 +3,10 @@ from __future__ import annotations
 import io
 import unittest
 import wave
+import tempfile
+import threading
+from pathlib import Path
+from unittest.mock import Mock
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,6 +14,8 @@ import numpy as np
 from core.listen import VoskListener
 from core.models import RecognitionResult
 from services.audio.whisper import WhisperRecognizer
+from services.audio.refinement import RefinementWait
+from config import Settings, ProjectPaths
 
 
 class HybridRecognitionTests(unittest.TestCase):
@@ -123,6 +129,125 @@ class HybridRecognitionTests(unittest.TestCase):
             self.assertTrue(self.listener._should_refine(RecognitionResult(text, confidence), samples, 16000)[0])
 
 
+class SelectiveRefinementTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.listener = VoskListener(Settings(
+            ProjectPaths.from_root(Path(self.directory.name)), stt_selective_whisper_enabled=True,
+            stt_endpoint_adaptive=True, stt_whisper_soft_budget_ms=500, stt_whisper_hard_budget_ms=1000))
+        self.pcm = b'\x00\x10' * 16000
+        self.listener._input_candidates = Mock(return_value=[(0, 16000)])
+        self.listener.whisper = Mock(enabled=True)
+        self.listener.whisper.transcribe.return_value = RecognitionResult('Зрозуміла відповідь', .9, 'whisper')
+
+    def capture(self, text, confidence=.96, **flags):
+        self.listener._listen_on_device = Mock(return_value=(RecognitionResult(text, confidence, **flags), self.pcm))
+
+    def test_confident_chat_fast_path_and_low_confidence_refinement(self):
+        self.capture('Сьогодні був цікавий день')
+        self.assertEqual(self.listener.listen_once().engine, 'vosk')
+        self.listener.whisper.transcribe.assert_not_called()
+        self.capture('Сьогодні був цікавий день', .65)
+        self.assertEqual(self.listener.listen_once().engine, 'whisper')
+        self.listener.whisper.transcribe.assert_called_once()
+
+    def test_incomplete_suspicious_and_actions_refine_regardless_of_length(self):
+        for text, flags in [('я хотів', {}), ('це це це', {}), ('відкрий Telegram', {}),
+                            ('Завершена фраза', {'capture_truncated': True}),
+                            ('Завершена фраза', {'fragmented': True})]:
+            with self.subTest(text=text, flags=flags):
+                self.assertTrue(self.listener._should_refine(RecognitionResult(text, .99, **flags), self.pcm, 16000)[0])
+
+    def test_confirmation_and_scoped_reply_do_not_require_whisper(self):
+        for text in ('так', 'ні', 'гаразд'):
+            self.capture(text)
+            self.assertEqual(self.listener.listen_once(grammar=['так', 'ні', 'гаразд']).engine, 'vosk')
+        self.listener.scoped_reply = lambda text: text == 'Telegram'
+        self.capture('Telegram')
+        self.assertEqual(self.listener._should_refine(RecognitionResult('Telegram', .96), self.pcm, 16000),
+                         (False, 'scoped_context'))
+        self.assertEqual(self.listener.listen_once().engine, 'vosk')
+        self.listener.whisper.transcribe.assert_not_called()
+
+    def test_scoped_hint_uses_existing_pending_context_and_catalogue(self):
+        import time
+        from core.processor import CommandProcessor
+        processor = object.__new__(CommandProcessor)
+        processor.services = {'apps': SimpleNamespace(has_exact_name=lambda name: name == 'Telegram')}
+        pending = {'tool': 'open_app', 'expires': time.monotonic() + 60}
+        processor._natural_pending = pending
+        self.assertTrue(processor.stt_scoped_reply('Telegram'))
+        self.assertFalse(processor.stt_scoped_reply('невідома програма'))
+        self.assertFalse(processor.stt_scoped_reply('відкрий Telegram'))
+        self.assertIs(processor._natural_pending, pending)
+        pending['expires'] = 0
+        self.assertFalse(processor.stt_scoped_reply('Telegram'))
+
+    def test_empty_or_unreliable_refinement_never_authorizes_action(self):
+        for refined in (RecognitionResult('', 0, 'whisper'), RecognitionResult('відкрий Telegram', .2, 'whisper')):
+            self.capture('відкрий Telegram', .7)
+            self.listener.whisper.transcribe.return_value = refined
+            result = self.listener.listen_once()
+            self.assertTrue(result.fragmented)
+            self.assertTrue(result.incomplete)
+
+    def test_timeout_chat_fallback_and_action_repeat(self):
+        self.listener.settings.stt_whisper_soft_budget_ms = 10
+        self.listener.settings.stt_whisper_hard_budget_ms = 40
+        for text, incomplete in [('День був цікавий', False), ('відкрий Telegram', True)]:
+            release = threading.Event()
+            completed = threading.Event()
+
+            def transcribe(*args):
+                release.wait(2)
+                completed.set()
+                return RecognitionResult('late result', .99, 'whisper')
+
+            self.listener.whisper.transcribe.side_effect = transcribe
+            self.capture(text, .7)
+            try:
+                result = self.listener.listen_once()
+                self.assertEqual(result.text, text)
+                self.assertEqual(result.engine, 'vosk')
+                self.assertTrue(result.fragmented)  # Existing processor tool-free guard.
+                self.assertEqual(result.incomplete, incomplete)
+            finally:
+                release.set()
+                self.assertTrue(completed.wait(1))
+                self.assertTrue(self.listener._refinement_wait._active.wait(1))
+            self.assertEqual(result.text, text)  # Late completion cannot mutate the turn.
+
+    def test_busy_cancelled_and_late_results_do_not_start_parallel_jobs(self):
+        waiter = RefinementWait()
+        release = threading.Event()
+        recognizer = Mock()
+        recognizer.transcribe.side_effect = lambda *args: (release.wait(2), RecognitionResult('late', .9, 'whisper'))[1]
+        try:
+            self.assertEqual(waiter.run(recognizer, b'', 16000, 5, 20, lambda: False)[1], 'timeout')
+            self.assertEqual(waiter.run(recognizer, b'', 16000, 5, 20, lambda: False)[1], 'busy')
+            recognizer.transcribe.assert_called_once()
+        finally:
+            release.set()
+            self.assertTrue(waiter._active.wait(1))
+        release.clear()
+        try:
+            self.assertEqual(waiter.run(recognizer, b'', 16000, 5, 20, lambda: True)[1], 'cancelled')
+        finally:
+            release.set()
+            self.assertTrue(waiter._active.wait(1))
+
+    def test_interruption_ignores_pending_refinement(self):
+        def transcribe(*args):
+            self.listener.interrupt()
+            return RecognitionResult('відкрий Telegram', .99, 'whisper')
+        self.listener.whisper.transcribe.side_effect = transcribe
+        self.capture('відкрий Telegram', .7)
+        result = self.listener.listen_once()
+        self.assertEqual(result.engine, 'interrupted')
+        self.assertEqual(result.text, '')
+
+
 class WhisperAudioTests(unittest.TestCase):
     def test_pcm_is_wrapped_as_valid_mono_wav(self):
         pcm = b"\x00\x00\x01\x00" * 80
@@ -133,4 +258,3 @@ class WhisperAudioTests(unittest.TestCase):
             self.assertEqual(audio.getsampwidth(), 2)
             self.assertEqual(audio.getframerate(), 48_000)
             self.assertEqual(audio.readframes(audio.getnframes()), pcm)
-

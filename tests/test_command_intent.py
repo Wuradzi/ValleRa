@@ -188,6 +188,65 @@ class IntentExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.data["command_type"], "interpretation_cancelled")
         self.apps.open_default_browser.assert_not_called()
 
+    async def test_cancelled_approval_cannot_be_reused_by_next_action(self):
+        speaking = asyncio.Event()
+        release = asyncio.Event()
+
+        async def speech():
+            speaking.set()
+            await release.wait()
+
+        confirmation = ConfirmationService(AsyncMock(), wait_for_speech=speech)
+        self.context.confirm = confirmation.ask
+        intent = CommandIntent('open_app', {'name': 'браузер'})
+        old = asyncio.create_task(execute_intent(intent, self.context))
+        await asyncio.wait_for(speaking.wait(), 1)
+        confirmation.submit('так', confirmation.request_id)
+        old_id = confirmation.request_id
+        old.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await old
+        self.assertFalse(confirmation.submit('так'))
+        release.set()
+        new = asyncio.create_task(execute_intent(intent, self.context))
+        try:
+            await asyncio.wait_for(confirmation.wait_until_requested(), 1)
+            self.assertNotEqual(old_id, confirmation.request_id)
+            self.assertTrue(confirmation._responses.empty())
+            self.apps.open_default_browser.assert_not_called()
+            confirmation.submit('ні', confirmation.request_id)
+            result = await asyncio.wait_for(new, 1)
+            self.assertEqual(result.data['command_type'], 'interpretation_cancelled')
+            self.apps.open_default_browser.assert_not_called()
+        finally:
+            if not new.done():
+                new.cancel()
+            await asyncio.gather(new, return_exceptions=True)
+
+    async def test_correlated_voice_no_does_not_execute_action(self):
+        confirmation = ConfirmationService(AsyncMock(), timeout_seconds=1)
+        self.context.confirm = confirmation.ask
+        task = asyncio.create_task(execute_intent(CommandIntent('open_app', {'name': 'браузер'}), self.context))
+        try:
+            await confirmation.wait_until_requested()
+            self.assertTrue(confirmation.submit('ні', confirmation.request_id, confidence=.95))
+            result = await asyncio.wait_for(task, 1)
+            self.assertEqual(result.data['command_type'], 'interpretation_cancelled')
+            self.apps.open_default_browser.assert_not_called()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_submission_is_not_verified_success_and_is_not_retried(self):
+        self.apps.verify_launch = Mock(return_value={'verified': False})
+        result = await execute_intent(CommandIntent('open_app', {'name': 'браузер'}), self.context)
+        self.assertTrue(result.data['accepted'])
+        self.assertFalse(result.data['verified'])
+        self.assertFalse(result.data['success'])
+        self.apps.open_default_browser.assert_called_once()
+        self.apps.verify_launch.assert_called_once()
+        self.confirm.assert_awaited_once()
+
     async def test_cancellation_while_speaking_clears_confirmation_and_never_executes(self):
         started = asyncio.Event()
 
@@ -199,7 +258,7 @@ class IntentExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.context.confirm = confirmation.ask
         task = asyncio.create_task(execute_intent(CommandIntent("open_app", {"name": "браузер"}), self.context))
         await asyncio.wait_for(started.wait(), 1)
-        confirmation.submit("так")
+        confirmation.submit("так", confirmation.request_id)
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task

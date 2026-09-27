@@ -9,8 +9,8 @@ import numpy as np
 
 
 class SpeechEnergyGate:
-    def __init__(self, sample_rate: int, threshold: float):
-        self.window_bytes = max(800, int(sample_rate * 0.25)) * 2
+    def __init__(self, sample_rate: int, threshold: float, *, window_ms: int = 250):
+        self.window_bytes = max(800, int(sample_rate * window_ms / 1000)) * 2
         self.threshold = threshold
         self.pending = bytearray()
         self.observed = False

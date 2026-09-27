@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import logging
+import math
 from uuid import uuid4
 from collections.abc import Awaitable, Callable
 
@@ -45,8 +47,24 @@ class ConfirmationService:
         "скасувати",
         "скасовую",
         "відміна",
+        "не треба",
+        "скасуй",
+        "відмовляюсь",
     }
     GRAMMAR = sorted(ACCEPTED | REJECTED)
+    VOICE_MIN_CONFIDENCE = 0.8
+
+    @classmethod
+    def recognition_grammar(cls, model):
+        # Ukrainian models may use <UNK>, not the usual Vosk [unk].
+        grammar = list(cls.GRAMMAR)
+        for unknown in ('[unk]', '<UNK>', '<unk>'):
+            index = model.vosk_model_find_word(unknown)
+            if isinstance(index, int) and index >= 0:
+                grammar.append(unknown)
+                break
+        logging.getLogger(__name__).info("confirmation_grammar=%s", grammar)
+        return grammar
 
     def __init__(
         self,
@@ -57,7 +75,7 @@ class ConfirmationService:
         self.speak = speak
         self.timeout_seconds = timeout_seconds
         self.wait_for_speech = wait_for_speech
-        self._responses: asyncio.Queue[str] = asyncio.Queue()
+        self._responses: asyncio.Queue[tuple[str, float | None]] = asyncio.Queue()
         self._request_event = asyncio.Event()
         self._response_processed = asyncio.Event()
         self._response_processed.set()
@@ -75,11 +93,12 @@ class ConfirmationService:
     async def wait_until_response_processed(self) -> None:
         await self._response_processed.wait()
 
-    def submit(self, text: str) -> bool:
-        if not self.awaiting:
+    def submit(self, text: str, request_id: str | None = None, *, confidence: float | None = None) -> bool:
+        if not self.awaiting or request_id is None or request_id != self.request_id:
+            logging.getLogger(__name__).info("confirmation_reply_rejected=stale_or_uncorrelated")
             return False
         self._response_processed.clear()
-        self._responses.put_nowait(text)
+        self._responses.put_nowait((text, confidence))
         return True
 
     async def ask(self, operation: str) -> bool:
@@ -105,7 +124,7 @@ class ConfirmationService:
                         await self._cancel_notice(operation, "timeout")
                         return False
                     try:
-                        answer = await asyncio.wait_for(
+                        answer, confidence = await asyncio.wait_for(
                             self._responses.get(),
                             timeout=remaining,
                         )
@@ -113,7 +132,7 @@ class ConfirmationService:
                         await self._cancel_notice(operation, "timeout")
                         return False
 
-                    decision = self._decision(answer)
+                    decision = self._decision(answer, confidence)
                     if decision is True:
                         if isinstance(operation, ConfirmationPrompt):
                             operation.outcome = "approved"
@@ -143,7 +162,10 @@ class ConfirmationService:
                          else "Операцію скасовано.")
 
     @classmethod
-    def _decision(cls, answer: str) -> bool | None:
+    def _decision(cls, answer: str, confidence: float | None = None) -> bool | None:
+        if confidence is not None and (not math.isfinite(confidence)
+                                       or not cls.VOICE_MIN_CONFIDENCE <= confidence <= 1):
+            return None
         normalized = " ".join(
             re.sub(r"[^0-9a-zа-яіїєґ'’\s]", " ", answer.lower()).split()
         )

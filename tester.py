@@ -1553,7 +1553,7 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         app.web_ui = None
         app.processor = SimpleNamespace(interrupt_conversation=Mock())
         app.speaker = SimpleNamespace(stop=AsyncMock())
-        app.confirmation = SimpleNamespace(submit=Mock(return_value=False))
+        app.confirmation = SimpleNamespace(submit=Mock(return_value=False), awaiting=False, request_id='request')
         app.command_queue = asyncio.Queue()
         app._wait_for_input_slot = AsyncMock()
         app.command_idle = asyncio.Event()
@@ -1562,15 +1562,15 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(app.command_queue.empty())
         app.speaker.stop.assert_awaited_once()
         app.confirmation.submit.return_value = True
-        await app._submit_text('так')
+        await app._submit_text('так', 'request')
         self.assertEqual(app.speaker.stop.await_count, 1)
         self.assertEqual(app.processor.interrupt_conversation.call_count, 1)
         self.assertTrue(app.command_queue.empty())
         app.confirmation.submit.return_value = False
         await app._submit_text('Нове питання')
-        self.assertEqual(await app.command_queue.get(), ('Нове питання', 'text', 1.0))
+        self.assertEqual((await app.command_queue.get())[:3], ('Нове питання', 'text', 1.0))
 
-    async def test_confirmation_started_during_stop_consumes_reply(self):
+    async def test_confirmation_started_during_stop_rejects_uncorrelated_reply(self):
         from core.app import ValleRaApp
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, Mock
@@ -1578,11 +1578,15 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         app.web_ui = None
         app.processor = SimpleNamespace(interrupt_conversation=Mock())
         app.speaker = SimpleNamespace(stop=AsyncMock())
-        app.confirmation = SimpleNamespace(submit=Mock(side_effect=[False, True]))
+        app.confirmation = SimpleNamespace(submit=Mock(), awaiting=False)
+        async def stop():
+            app.confirmation.awaiting = True
+        app.speaker.stop.side_effect = stop
         app._wait_for_input_slot = AsyncMock()
         app.command_queue = asyncio.Queue()
         await app._submit_text('так')
         self.assertTrue(app.command_queue.empty())
+        app.confirmation.submit.assert_not_called()
 
     async def test_app_discards_late_local_answer_then_processes_new_text(self):
         from core.app import ValleRaApp
@@ -1616,7 +1620,7 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
             loop_task = asyncio.create_task(app._command_loop())
             pending = None
             try:
-                await app.command_queue.put(('Команда: пошук', 'text', 1.0))
+                await app._enqueue_command('Команда: пошук', 'text', 1.0)
                 await asyncio.wait_for(started.wait(), 1)
                 pending = asyncio.create_task(app._submit_text('Це не те'))
                 await asyncio.sleep(.03)
@@ -3350,7 +3354,7 @@ class CommandCatalogueChecks(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(confirmation.ask(ConfirmationPrompt("Fixture C:/apps/program.exe", "відкриття програми")))
         await confirmation.wait_until_requested()
         self.assertIn("C:/apps/program.exe", confirmation.prompt)
-        confirmation.submit("так")
+        confirmation.submit("так", confirmation.request_id)
         self.assertTrue(await task)
         self.assertNotIn("program.exe", speak.await_args.args[0])
         self.assertIn("відкриття програми", speak.await_args.args[0])
@@ -3363,7 +3367,7 @@ class CommandCatalogueChecks(unittest.IsolatedAsyncioTestCase):
         confirmation = ConfirmationService(speak)
         task = asyncio.create_task(confirmation.ask("редагування файла fixture.txt"))
         await confirmation.wait_until_requested()
-        confirmation.submit("ні")
+        confirmation.submit("ні", confirmation.request_id)
         self.assertFalse(await task)
         self.assertIn("fixture.txt", speak.await_args_list[0].args[0])
 
@@ -3437,14 +3441,58 @@ class NaturalTurnChecks(unittest.IsolatedAsyncioTestCase):
     def test_decoder_rejects_malformed_duplicate_and_unknown_payloads(self):
         from core.natural_turn import TurnDecoder
         from core.command_intent import InvalidIntent
-        for text in ('bad\ntext', 'CHAT\n', 'ACTION\n{"tool":"shell","arguments":{}}',
+        for text in ('bad\nACTION', 'CHAT\n', 'ACTION\n{"tool":"shell","arguments":{}}',
                      'ACTION\n{"tool":"prepare_workplace","tool":"prepare_workplace","arguments":{}}',
                      'ACTION\n{"tool":"prepare_workplace","arguments":{"path":"evil.exe"}}',
-                     "A" * 20):
+                     "A" * 16001):
             with self.subTest(text=text), self.assertRaises(InvalidIntent):
                 decoder = TurnDecoder()
                 decoder.feed(text)
                 decoder.finish()
+
+    def test_plain_fallback_and_valid_dialogue_at_every_chunk_split(self):
+        from core.natural_turn import TurnDecoder
+        for text, kind, response in (
+            ("CHAT\nВітаю!", "chat", "Вітаю!"),
+            ("CLARIFY\nЯкий файл?", "clarify", "Який файл?"),
+            ("Вітаю!", "chat", "Вітаю!"),
+            ("Це звичайна відповідь без заголовка.\nДруге речення.", "chat",
+             "Це звичайна відповідь без заголовка.\nДруге речення."),
+        ):
+            for index in range(len(text) + 1):
+                with self.subTest(text=text, index=index):
+                    decoder = TurnDecoder()
+                    emitted = decoder.feed(text[:index]) + decoder.feed(text[index:])
+                    result = decoder.finish()
+                    self.assertEqual((result.kind, result.response), (kind, response))
+                    self.assertIsNone(result.intent)
+                    if not text.startswith(("CHAT\n", "CLARIFY\n")):
+                        self.assertEqual(emitted, "")
+
+    async def test_headerless_control_is_never_spoken_persisted_or_executed(self):
+        from unittest.mock import AsyncMock
+        for text in ('{"tool":"open_app","arguments":{"name":"браузер"}}',
+                     'Вітаю.\nACTION\n{"tool":"prepare_workplace","arguments":{}}',
+                     'Вітаю. action {', 'tool: open_app', 'arguments: {}',
+                     '```json\n{}\n```', 'Вітаю.\nCHAT\nЩе текст', 'tool_call: open_app'):
+            with self.subTest(text=text):
+                self.chunks = list(text)  # Include split control markers.
+                callback = AsyncMock()
+                result = await self.manager.converse("Привіт", on_chunk=callback)
+                self.assertEqual(result.kind, "unavailable")
+                self.assertIsNone(result.intent)
+                callback.assert_not_awaited()
+                self.manager._append_history.assert_not_called()
+
+    async def test_plain_fallback_is_delivered_only_after_complete_stream(self):
+        from unittest.mock import AsyncMock
+        self.chunks = ["Привіт. ", "Як справи?"]
+        callback = AsyncMock()
+        result = await self.manager.converse("Привіт", on_chunk=callback)
+        self.assertEqual(result.kind, "chat")
+        self.assertIsNone(result.intent)
+        callback.assert_awaited_once_with("Привіт. Як справи?")
+        self.manager._append_history.assert_called_once_with("Привіт", result.response)
 
     def test_local_guard_rejects_mentions_quotes_negations_and_past_tense(self):
         from core.natural_turn import direct_request
@@ -3475,6 +3523,88 @@ class NaturalTurnChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.kind, "action")
         callback.assert_not_awaited()
         self.manager._append_history.assert_not_called()
+
+    async def test_fragmented_request_never_executes_or_consumes_pending_selection(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        processor = self.processor()
+        processor.services['tasks'] = SimpleNamespace(consume=AsyncMock())
+        self.action()
+        confirm = AsyncMock(return_value=True)
+        with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+            result = await processor.process('відкрий браузер', confirm, 'voice', allow_actions=False)
+            self.assertEqual(result.data['command_type'], 'fragment_clarify')
+            self.assertIn('нічого не виконано', result.response)
+            execute.assert_not_awaited()
+        processor.services['tasks'].consume.assert_not_awaited()
+        confirm.assert_not_awaited()
+        self.manager._append_history.assert_not_called()
+
+    async def test_fragmented_chat_and_clarify_still_work_without_actions(self):
+        from unittest.mock import AsyncMock
+        for header in ('CHAT', 'CLARIFY'):
+            self.chunks = [header + '\nРозкажіть більше.']
+            result = await self.processor().process('я думав про нашу розмову', AsyncMock(),
+                                                     'voice', allow_actions=False)
+            self.assertEqual(result.response, 'Розкажіть більше.')
+
+    async def test_final_complete_stt_command_uses_normal_confirmation(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock
+        from core.listen import VoskListener
+        from core.models import RecognitionResult
+        from config import Settings, ProjectPaths
+        with tempfile.TemporaryDirectory() as directory:
+            listener = VoskListener(Settings(ProjectPaths.from_root(Path(directory)), stt_endpoint_adaptive=True))
+            listener._input_candidates = Mock(return_value=[(0, 16000)])
+            listener._listen_on_device = Mock(return_value=(
+                RecognitionResult('відкрий', .6, fragmented=True, incomplete=True), b'pcm'))
+            listener._should_refine = Mock(return_value=(True, 'test'))
+            listener.whisper = SimpleNamespace(enabled=True, transcribe=Mock(
+                return_value=RecognitionResult('відкрий браузер', .95, 'whisper')))
+            recognized = listener.listen_once()
+        processor = self.processor()
+        self.action()
+        confirm = AsyncMock(return_value=False)
+        await processor.process(recognized.text, confirm, 'voice', allow_actions=not recognized.fragmented)
+        confirm.assert_awaited_once()
+        processor.services['apps'].open_default_browser.assert_not_called()
+
+    async def test_short_stt_reply_keeps_existing_scoped_clarification(self):
+        from unittest.mock import AsyncMock
+        from services.audio.endpoint import QuietEndpoint
+        processor = self.processor()
+        self.chunks = ['CLARIFY\nЯку програму відкрити?']
+        confirm = AsyncMock(return_value=False)
+        await processor.process('Відкрий програму', confirm)
+        self.assertIsNotNone(processor._natural_pending)
+        self.action(arguments={'name': 'Telegram'})
+        await processor.process('Telegram', confirm, 'voice',
+                                allow_actions=not QuietEndpoint.possible_fragment('Telegram'))
+        confirm.assert_awaited_once()
+        self.assertIn('telegram', confirm.await_args.args[0].lower())
+
+    async def test_fragmented_explicit_command_requires_fresh_request(self):
+        from unittest.mock import AsyncMock
+        result = await self.processor().process('Команда відкрий браузер', AsyncMock(),
+                                                'voice', allow_actions=False)
+        self.assertEqual(result.data['command_type'], 'fragment_clarify')
+        self.assertEqual(self.requests, [])
+        result = await self.processor().process('я хотів', AsyncMock(), 'voice',
+                                                allow_actions=False, incomplete_input=True)
+        self.assertEqual(result.data['command_type'], 'fragment_clarify')
+        self.assertEqual(self.requests, [])
+
+    async def test_fragmented_conversation_cancellation_and_stop_are_safe(self):
+        from unittest.mock import AsyncMock
+        processor = self.processor()
+        self.chunks = [asyncio.CancelledError()]
+        result = await processor.process('інша думка', AsyncMock(), 'voice', allow_actions=False)
+        self.assertEqual(result.data['command_type'], 'chat_interrupted')
+        self.assertIsNone(processor._chat_task)
+        result = await processor.process('замовкни', AsyncMock(), 'voice', allow_actions=False)
+        self.assertEqual(result.data['command_type'], 'speech_stopped')
+        processor.speaker.stop.assert_awaited()
 
     async def test_partial_action_connection_failure_never_returns_action(self):
         from unittest.mock import AsyncMock

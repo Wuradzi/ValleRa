@@ -8,11 +8,12 @@ import time
 
 from core.command_router import CommandRouter
 from core.confirmation import ConfirmationService
+from core.dispatch_guard import DispatchGuard
 from core.listen import VoskListener
 from core.metrics import MetricsCollector
 from core.performance import CURRENT_TURN, DISABLED_PERFORMANCE, PerformanceRecorder, TurnTiming
 from core.models import RecognitionResult
-from core.console import console_input, console_print
+from core.console import correlated_console_input, console_print
 from core.processor import COMMAND_PREFIX, STOP_SPEECH, PAUSE_CONVERSATION, CommandProcessor
 from core.security import redact_user_text, scrub_sensitive_environment
 from core.skill_loader import SkillLoader
@@ -42,7 +43,10 @@ class ValleRaApp:
     def __init__(self, settings, secret_store, text_only: bool = False, *, performance=None):
         self.settings = settings
         self.text_only = text_only
-        self.command_queue: asyncio.Queue[tuple[str, str, float] | tuple[str, str, float, TurnTiming | None]] = asyncio.Queue(
+        # Last field is an issued, single-use operational turn ID (not a transcript).
+        self.command_queue: asyncio.Queue[
+            tuple[str, str, float, TurnTiming | None, bool, bool, str]
+        ] = asyncio.Queue(
             maxsize=1
         )
         self.metrics = MetricsCollector(settings.paths.data_dir / "metrics.jsonl")
@@ -130,6 +134,8 @@ class ValleRaApp:
         self.processor = CommandProcessor(
             settings, router, self.llm, self.speaker, self.metrics, services
         )
+        if self.listener is not None:
+            self.listener.scoped_reply = self.processor.stt_scoped_reply
         self.confirmation = ConfirmationService(
             self._say_confirmation,
             settings.confirmation_timeout_seconds,
@@ -224,6 +230,8 @@ class ValleRaApp:
             await asyncio.gather(*cleanup, return_exceptions=True)
             await asyncio.gather(*tasks, return_exceptions=True)
             self._tasks = []
+            if hasattr(self, "_dispatch_guard"):
+                self._dispatch_guard.pending.clear()
 
     async def _initialize_backends(self) -> None:
         started = asyncio.get_running_loop().time()
@@ -284,9 +292,28 @@ class ValleRaApp:
         except Exception:
             logger.exception("Update check failed")
 
+    async def _enqueue_command(self, text, source, confidence, timing=None, fragmented=False, incomplete=False):
+        # Created once at ingress, retained by every delivery of this queue item.
+        if not hasattr(self, "_dispatch_guard"):
+            self._dispatch_guard = DispatchGuard()
+        turn_id = self._dispatch_guard.issue()
+        try:
+            await self.command_queue.put((text, source, confidence, timing, fragmented, incomplete, turn_id))
+        except BaseException:
+            self._dispatch_guard.discard(turn_id)
+            raise
+
     async def _command_loop(self) -> None:
         while self.running:
             item = await self.command_queue.get()
+            guard = getattr(self, "_dispatch_guard", None)
+            if len(item) != 7 or guard is None or not guard.claim(item[6]):
+                logger.warning("turn_dispatch_rejected=duplicate_or_unissued")
+                self.command_queue.task_done()
+                if self.command_queue.empty():
+                    self.command_idle.set()
+                continue
+            logger.debug("turn_dispatch_claimed operational_turn_id=%s", item[6])
             text, source, confidence = item[:3]
             timing = item[3] if len(item) > 3 else None
             if timing is None:
@@ -320,6 +347,8 @@ class ValleRaApp:
                     text,
                     self.confirmation.ask,
                     source,
+                    **({"allow_actions": False, "incomplete_input": bool(item[5]) if len(item) > 5 else False}
+                       if len(item) > 4 and item[4] else {}),
                 )
                 if self.web_ui is not None:
                     if result.data.get("command_type") == "conversation_new":
@@ -365,10 +394,16 @@ class ValleRaApp:
                     continue
 
                 if self.confirmation.awaiting:
+                    confirmation_id = self.confirmation.request_id
                     result = await self._listen_for_turn(
                         float(self.settings.confirmation_timeout_seconds),
                         ConfirmationService.GRAMMAR,
                     )
+                    decision = ConfirmationService._decision(result.text, result.confidence)
+                    logger.info("confirmation_voice recognized=%r engine=%s confidence=%.3f semantic=%s request=%s",
+                                redact_user_text(result.text), result.engine, result.confidence,
+                                'confirm' if decision is True else 'deny' if decision is False else 'unknown',
+                                confirmation_id[:8] if confirmation_id else 'none')
                     if result.text:
                         if self.web_ui is not None:
                             self.web_ui.publish("user", result.text, source="voice")
@@ -377,7 +412,7 @@ class ValleRaApp:
                             f"[CONFIRM VOICE/{result.engine} "
                             f"{result.confidence:.2f}] {safe_text}"
                         )
-                        if self.confirmation.submit(result.text):
+                        if self.confirmation.submit(result.text, confirmation_id, confidence=result.confidence):
                             await self.confirmation.wait_until_response_processed()
                     continue
 
@@ -397,7 +432,7 @@ class ValleRaApp:
                     f"[VOICE/{result.engine} {result.confidence:.2f}] "
                     f"{redact_user_text(result.text)}"
                 )
-                repaired_text = repair_voice_text(
+                repaired_text = result.text if result.fragmented else repair_voice_text(
                     result.text,
                     self.services["state"].get("mode", "chat"),
                 )
@@ -410,9 +445,8 @@ class ValleRaApp:
                 self.command_idle.clear()
                 if self.web_ui is not None:
                     self.web_ui.publish("user", repaired_text, source="voice")
-                await self.command_queue.put(
-                    (repaired_text, "voice", result.confidence, result.timing)
-                )
+                await self._enqueue_command(repaired_text, "voice", result.confidence, result.timing,
+                                            result.fragmented, result.incomplete)
             except FileNotFoundError as exc:
                 self._voice_error = True
                 self._voice_unavailable = True
@@ -468,9 +502,9 @@ class ValleRaApp:
 
     async def _text_input_loop(self) -> None:
         loop = asyncio.get_running_loop()
-        text_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=1)
+        text_queue: asyncio.Queue[tuple[str, str | None] | None] = asyncio.Queue(maxsize=1)
 
-        def enqueue_text(text: str | None) -> None:
+        def enqueue_text(text) -> None:
             if text is None:
                 asyncio.create_task(text_queue.put(None))
                 return
@@ -482,7 +516,7 @@ class ValleRaApp:
         def read_console() -> None:
             while self.running:
                 try:
-                    text = console_input("> ")
+                    text = correlated_console_input("> ", lambda: self.confirmation.request_id)
                 except EOFError:
                     text = None
                 try:
@@ -500,15 +534,20 @@ class ValleRaApp:
         self._console_thread.start()
 
         while self.running:
-            text = await text_queue.get()
-            if text is None:
+            entry = await text_queue.get()
+            if entry is None:
                 return
+            text, confirmation_id = entry
             if text.strip():
-                await self._submit_text(text.strip())
+                await self._submit_text(text.strip(), confirmation_id)
 
-    async def _submit_text(self, text):
+    async def _submit_text(self, text, confirmation_id=None):
         if self.web_ui is not None:
             self.web_ui.publish("user", text, source="text")
+        if confirmation_id is not None and confirmation_id != self.confirmation.request_id:
+            if not self.confirmation.submit(text, confirmation_id) and self.web_ui is not None:
+                self.web_ui.publish("notice", "Підтвердження змінилося. Перевірте поточну дію й повторіть відповідь.")
+            return
         if CANCEL_WORKPLACE.fullmatch(text):
             task = self.services["workplace"]
             cancelled = task.cancel(task.current["id"]) if task.current else False
@@ -517,7 +556,8 @@ class ValleRaApp:
             if self.web_ui is not None:
                 self.web_ui.publish("notice", notice)
             return
-        if self.confirmation.submit(text):
+        if confirmation_id is not None or self.confirmation.awaiting:
+            self.confirmation.submit(text, confirmation_id)
             return
         # Only tool-free chat is cancelled. File/app operations keep running;
         # muting their output does not mean cancelling or undoing their effects.
@@ -534,10 +574,11 @@ class ValleRaApp:
         await self._wait_for_input_slot()
         # A local action may have entered confirmation while we were stopping
         # speech. Never let its reply become a separate local command.
-        if self.confirmation.submit(text):
+        if self.confirmation.awaiting:
+            logger.info("confirmation_reply_rejected=request_changed_during_delivery")
             return
         self.command_idle.clear()
-        await self.command_queue.put((text, "text", 1.0))
+        await self._enqueue_command(text, "text", 1.0)
 
     def web_state(self):
         """Only explicit UI fields: never export settings, history files or secrets."""
@@ -586,7 +627,7 @@ class ValleRaApp:
                     or type(data.get("accept")) is not bool):
                 return 409, {"error": "Це підтвердження вже неактивне."}
             answer = "так" if data["accept"] else "ні"
-            self.confirmation.submit(answer)
+            self.confirmation.submit(answer, data["request_id"])
             self.web_ui.publish("user", answer, source="text")
         elif action == "microphone":
             if (self.listener is None or self._voice_unavailable
