@@ -24,6 +24,43 @@ jobs:
       - name: Compile
         run: python -m compileall -q .
       - name: Unit tests
+        id: unit-tests
         run: python tester.py --all --verbose
+      - name: Show test failure diagnostics
+        if: ${{ always() && steps.unit-tests.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          $reports = @(Get-ChildItem -Path logs/tests -Filter report.json -Recurse -ErrorAction SilentlyContinue)
+          if ($reports.Count -eq 0) {
+            Write-Output 'No test report was produced. See the Unit tests step output.'
+          }
+          foreach ($file in $reports) {
+            try {
+              $report = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+              Write-Output "Report: $($file.Name); status: $($report.status)"
+              foreach ($case in $report.cases) {
+                if ($case.status -in @('failed', 'error', 'unexpected_success', 'interrupted')) {
+                  Write-Output "Test: $($case.id); status: $($case.status)"
+                }
+              }
+            } catch {
+              Write-Output "Could not parse test report: $($_.Exception.Message)"
+            }
+          }
+          Get-ChildItem -Path logs/tests -Filter details.log -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Output "--- Last 200 lines: $($_.FullName) ---"
+            Get-Content -LiteralPath $_.FullName -Encoding utf8 -Tail 200
+          }
+      - name: Upload test diagnostics
+        if: ${{ always() && steps.unit-tests.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-diagnostics-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            logs/tests/**/report.json
+            logs/tests/**/details.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Static syntax checks
+        if: ${{ !cancelled() && steps.unit-tests.outcome != 'skipped' }}
         run: python -m ruff check .
