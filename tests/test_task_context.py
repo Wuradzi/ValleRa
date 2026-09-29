@@ -191,10 +191,11 @@ class TaskIntegrationTests(unittest.IsolatedAsyncioTestCase):
             confirm = AsyncMock(return_value=True)
             result = await processor.process("Команда: допоможи відшукати документ про диплом", confirm)
             self.assertEqual(result.data["command_type"], "file_search")
+            target = services["tasks"].pending.entries[0]
             confirm.assert_awaited_once()
             files.open.assert_not_called()
             await processor.process("перший", confirm)
-            files.open.assert_called_once_with(root / "диплом.txt")
+            files.open.assert_called_once_with(target)
             llm.interpret_command.assert_awaited_once()
             llm.chat.assert_not_awaited()
 
