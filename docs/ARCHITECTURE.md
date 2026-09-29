@@ -1,5 +1,39 @@
 # Архітектура ValleRa
 
+## Typed turn transport
+
+`core.models.TurnEnvelope` — frozen/slots dataclass, immutable snapshot одного
+dispatch. `ValleRaApp._enqueue_command()` створює його з `RecognitionResult`
+або текстового введення; `command_queue` приймає тільки envelope, не positional
+tuples. `CommandProcessor.process()` отримує той самий operational `turn_id`,
+а для локального маршруту передає його в `CommandContext.turn_id`.
+
+ID видає існуючий `DispatchGuard`: runtime session nonce + sequence. Перед
+processor ticket споживається один раз. `session_id` походить із того самого guard;
+ID існуючого `TurnTiming` залишається окремим діагностичним ID. Додавання timing
+через immutable replacement не змінює operational ID.
+
+Envelope містить source, text (поточний routing input), transcript (до repair),
+STT engine/confidence, timing reference та незалежні прапорці:
+
+- `utterance_incomplete`: незавершеність репліки за наявною endpoint оцінкою;
+- `capture_truncated`: capture завершився за лімітом;
+- `recognition_unreliable`: зафіксована ненадійність refinement/conflict;
+- `action_eligible`: чинний STT дозвіл увійти до подальших safety checks, не
+  підтвердження й не дозвіл виконати tool;
+- `clarification_required`: збережений вибір між повтором фрази й tool-free chat.
+
+Низький confidence, direct_request, confirmation та verification перевіряються
+як раніше. Confirmation відповіді не проходять command queue: correlation ID
+залишається в ConfirmationService/app. Microphone epoch перевіряється перед
+поверненням capture, а TaskContext/Whisper jobs/Speaker generation лишаються
+у своїх власників; envelope не дублює ці стани.
+
+Тимчасова сумісність: `RecognitionResult.fragmented/incomplete` адаптуються
+до явних полів, `TurnEnvelope.fragmented` є read-only view `not action_eligible`;
+`process(str, ...)` залишається для прямих tests/probes. Production app передає
+лише envelope. Внутрішні PCM/IPC tuples не є command transport і не змінені.
+
 ## Гарантії виконання
 
 - Оригінальний текст зберігається окремо від нормалізованого intent: регістр

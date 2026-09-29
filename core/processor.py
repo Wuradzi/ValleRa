@@ -5,7 +5,7 @@ import asyncio
 import re
 import time
 
-from core.models import CommandContext, SkillResult
+from core.models import CommandContext, SkillResult, TurnEnvelope
 from core.command_actions import execute_intent
 from core.command_intent import CommandIntent, InterpretationUnavailable, MULTI_ACTION, can_interpret, preserves_search_intent
 from core.command_catalog import chat_catalog, local_intent_candidates
@@ -101,8 +101,15 @@ class CommandProcessor:
             return True
         return False
 
-    async def process(self, command: str, confirm, source: str = "voice", *, allow_actions=True,
+    async def process(self, command: str | TurnEnvelope, confirm, source: str = "voice", *, allow_actions=True,
                       incomplete_input=False) -> SkillResult:
+        # Direct string callers (probes/tests) keep their existing API; app always
+        # supplies an envelope. Never mint an operational ID in the processor.
+        input_turn = command if isinstance(command, TurnEnvelope) else None
+        if input_turn is not None:
+            command, source = input_turn.text, input_turn.source
+            allow_actions = allow_actions and input_turn.action_eligible
+            incomplete_input = incomplete_input or input_turn.clarification_required
         started = time.perf_counter()
         raw_text = command.strip()
         normalized = self._normalize(raw_text)
@@ -152,6 +159,7 @@ class CommandProcessor:
             source,
             raw_text=local_raw if local_raw is not None else raw_text,
             normalized_text=local_command if local_command is not None else normalized,
+            turn_id=input_turn.turn_id if input_turn is not None else None,
         )
 
         try:

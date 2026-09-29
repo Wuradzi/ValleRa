@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from config import ProjectPaths, Settings
 from core.app import ValleRaApp
-from core.models import RecognitionResult, SkillResult
+from core.models import RecognitionResult, SkillResult, TurnEnvelope
 from core.performance import DISABLED_PERFORMANCE, TurnTiming
 from core.speak import Speaker
 from services.audio.whisper_process import ProcessWhisperRecognizer, _worker
@@ -144,6 +144,43 @@ class ProcessLifecycleTests(unittest.TestCase):
 
 
 class VoiceTurnContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_envelope_flags_are_independent_and_immutable(self):
+        from dataclasses import FrozenInstanceError
+        from itertools import product
+        app = self.app()
+        for incomplete, truncated, unreliable in product((False, True), repeat=3):
+            recognition = RecognitionResult('raw', .9, 'whisper',
+                fragmented=incomplete or truncated or unreliable,
+                incomplete=incomplete or unreliable, capture_truncated=truncated,
+                utterance_incomplete=incomplete, recognition_unreliable=unreliable)
+            turn = await app._enqueue_command('repaired', 'voice', .9, recognition=recognition)
+            self.assertEqual(turn.transcript, 'raw')
+            self.assertEqual(turn.text, 'repaired')
+            self.assertEqual(turn.stt_engine, 'whisper')
+            self.assertEqual(turn.utterance_incomplete, incomplete)
+            self.assertEqual(turn.capture_truncated, truncated)
+            self.assertEqual(turn.recognition_unreliable, unreliable)
+            self.assertEqual(turn.action_eligible, not recognition.fragmented)
+            self.assertEqual(turn.clarification_required, recognition.incomplete)
+            self.assertEqual(turn.fragmented, recognition.fragmented)
+            with self.assertRaises(FrozenInstanceError):
+                turn.action_eligible = True
+            # Mutating the STT result later cannot mutate the dispatched snapshot.
+            recognition.text = 'late'
+            self.assertEqual(turn.transcript, 'raw')
+
+    async def test_positional_queue_items_are_not_a_runtime_compatibility_path(self):
+        app = self.app()
+        for size in (3, 4, 5, 6, 7):
+            await app.command_queue.put(('legacy', 'voice', 1) + (None,) * (size - 3))
+        task = asyncio.create_task(app._command_loop())
+        try:
+            await asyncio.wait_for(app.command_queue.join(), 1)
+            app.processor.process.assert_not_awaited()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     def test_console_binds_first_character_not_enter(self):
         from core.console import correlated_console_input
         current = ['A']
@@ -291,14 +328,22 @@ class VoiceTurnContractTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(app.command_queue.qsize(), 1)
                 item = app.command_queue.get_nowait()
                 app.command_queue.task_done()
-                expected = (result.text, 'voice', .9, timing, fragmented, incomplete)
-                self.assertEqual(item[:6], expected)
-                self.assertIn(item[6], app._dispatch_guard.pending)
+                self.assertIsInstance(item, TurnEnvelope)
+                self.assertEqual(item.text, result.text)
+                self.assertEqual(item.transcript, result.text)
+                self.assertEqual(item.source, 'voice')
+                self.assertEqual(item.stt_engine, 'vosk')
+                self.assertEqual(item.confidence, .9)
+                self.assertIs(item.timing, timing)
+                self.assertEqual(item.action_eligible, not fragmented)
+                self.assertEqual(item.utterance_incomplete, incomplete)
+                self.assertIn(item.turn_id, app._dispatch_guard.pending)
+                self.assertEqual(item.session_id, app._dispatch_guard.session_id)
                 await app.command_queue.put(item)
                 app.running = True
                 await asyncio.wait_for(app._command_loop(), 1)
-                app.processor.process.assert_awaited_once_with(result.text, app.confirmation.ask, 'voice',
-                    **({'allow_actions': False, 'incomplete_input': incomplete} if fragmented else {}))
+                app.processor.process.assert_awaited_once_with(item, app.confirmation.ask)
+                self.assertIs(app.processor.process.await_args.args[0], item)
                 self.assertTrue(app.command_queue.empty())
                 await asyncio.wait_for(app.command_queue.join(), 1)
 
@@ -341,12 +386,15 @@ class VoiceTurnContractTests(unittest.IsolatedAsyncioTestCase):
         app.processor.process.assert_not_awaited()
 
     async def test_enqueue_preserves_all_existing_guard_arguments(self):
-        for tail, kwargs in (((), {}), ((None,), {}), ((None, True), {'allow_actions': False, 'incomplete_input': False}),
-                             ((None, True, True), {'allow_actions': False, 'incomplete_input': True})):
+        for fragmented, incomplete in ((False, False), (True, False), (True, True)):
             app = self.app()
-            await app._enqueue_command('fixture', 'text', 1.0, *tail)
+            turn = await app._enqueue_command('fixture', 'voice', 1.0,
+                recognition=RecognitionResult('fixture', 1, fragmented=fragmented, incomplete=incomplete))
             await asyncio.wait_for(app._command_loop(), 1)
-            app.processor.process.assert_awaited_once_with('fixture', app.confirmation.ask, 'text', **kwargs)
+            received = app.processor.process.await_args.args[0]
+            self.assertEqual(received.turn_id, turn.turn_id)
+            self.assertEqual(received.action_eligible, not fragmented)
+            self.assertEqual(received.clarification_required, incomplete)
 
     async def test_stale_capture_is_discarded_before_new_turn(self):
         app = self.app()
@@ -372,7 +420,8 @@ class VoiceTurnContractTests(unittest.IsolatedAsyncioTestCase):
             await self.capture_once(app, RecognitionResult('new turn', .9))
             app.running = True
             await asyncio.wait_for(app._command_loop(), 1)
-            app.processor.process.assert_awaited_once_with('new turn', app.confirmation.ask, 'voice')
+            app.processor.process.assert_awaited_once()
+            self.assertEqual(app.processor.process.await_args.args[0].text, 'new turn')
         finally:
             release.set()
             if not old.done():

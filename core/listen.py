@@ -114,6 +114,9 @@ class VoskListener:
                 timing = result.timing
                 fragmented = result.fragmented
                 incomplete = result.incomplete
+                utterance_incomplete = (result.utterance_incomplete if result.utterance_incomplete is not None
+                                        else result.incomplete)
+                recognition_unreliable = result.recognition_unreliable
                 truncated = result.capture_truncated
                 selective = getattr(self.settings, 'stt_selective_whisper_enabled', False)
                 refine, reason, elapsed, outcome = False, 'confirmation_context' if grammar else 'disabled', 0, 'skip'
@@ -145,6 +148,7 @@ class VoskListener:
                         result = self._select_result(result, refined)
                         if getattr(self.settings, 'stt_endpoint_adaptive', False):
                             incomplete = QuietEndpoint.possible_fragment(result.text)
+                            utterance_incomplete = incomplete
                             fragmented = incomplete or truncated
                     else:
                         self.whisper.note_skip(reason)
@@ -173,6 +177,8 @@ class VoskListener:
                 result.fragmented = fragmented
                 result.incomplete = incomplete
                 result.capture_truncated = truncated
+                result.utterance_incomplete = utterance_incomplete
+                result.recognition_unreliable = recognition_unreliable or unsafe_refinement or result.engine == 'conflict'
                 if timing is not None:
                     timing.mark("recognition_ready")
                 return result

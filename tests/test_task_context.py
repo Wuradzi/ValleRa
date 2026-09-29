@@ -176,6 +176,10 @@ class TaskIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(target.name, services["state"]["last_open_action"]["response"])
 
     async def test_interpreted_search_then_selection_uses_one_model_call(self):
+        from core.models import TurnEnvelope
+        def turn(text, number):
+            return TurnEnvelope(turn_id=f'fixture:{number}', session_id='fixture', source='voice',
+                                text=text, transcript=text, stt_engine='vosk', confidence=.95)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "диплом.txt").write_text("fixture", encoding="utf-8")
@@ -189,12 +193,12 @@ class TaskIntegrationTests(unittest.IsolatedAsyncioTestCase):
                                           SimpleNamespace(route=AsyncMock(return_value=SkillResult(False))),
                                           llm, Mock(), Mock(), services)
             confirm = AsyncMock(return_value=True)
-            result = await processor.process("Команда: допоможи відшукати документ про диплом", confirm)
+            result = await processor.process(turn("Команда: допоможи відшукати документ про диплом", 1), confirm)
             self.assertEqual(result.data["command_type"], "file_search")
             target = services["tasks"].pending.entries[0]
             confirm.assert_awaited_once()
             files.open.assert_not_called()
-            await processor.process("перший", confirm)
+            await processor.process(turn("перший", 2), confirm)
             files.open.assert_called_once_with(target)
             llm.interpret_command.assert_awaited_once()
             llm.chat.assert_not_awaited()

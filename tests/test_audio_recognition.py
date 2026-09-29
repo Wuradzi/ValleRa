@@ -191,6 +191,8 @@ class SelectiveRefinementTests(unittest.TestCase):
             result = self.listener.listen_once()
             self.assertTrue(result.fragmented)
             self.assertTrue(result.incomplete)
+            self.assertTrue(result.recognition_unreliable)
+            self.assertFalse(result.utterance_incomplete)  # Complete words, but repeat required for safety.
 
     def test_timeout_chat_fallback_and_action_repeat(self):
         self.listener.settings.stt_whisper_soft_budget_ms = 10
@@ -212,6 +214,8 @@ class SelectiveRefinementTests(unittest.TestCase):
                 self.assertEqual(result.engine, 'vosk')
                 self.assertTrue(result.fragmented)  # Existing processor tool-free guard.
                 self.assertEqual(result.incomplete, incomplete)
+                self.assertTrue(result.recognition_unreliable)
+                self.assertFalse(result.utterance_incomplete)
             finally:
                 release.set()
                 self.assertTrue(completed.wait(1))

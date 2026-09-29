@@ -17,6 +17,37 @@ class RecognitionResult:
     fragmented: bool = False
     incomplete: bool = False
     capture_truncated: bool = False
+    # Explicit provenance; None supports older direct RecognitionResult fixtures.
+    utterance_incomplete: bool | None = None
+    recognition_unreliable: bool = False
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TurnEnvelope:
+    """One immutable dispatch payload, not a store for runtime service state.
+
+    action_eligible preserves the STT permission to enter existing safety checks;
+    it is never authorization to execute a tool. clarification_required preserves
+    the old repeat-vs-tool-free-chat choice independently of linguistic completion.
+    """
+    turn_id: str
+    session_id: str
+    source: str
+    text: str
+    transcript: str
+    stt_engine: str
+    confidence: float
+    utterance_incomplete: bool = False
+    capture_truncated: bool = False
+    recognition_unreliable: bool = False
+    action_eligible: bool = True
+    clarification_required: bool = False
+    timing: TurnTiming | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def fragmented(self) -> bool:
+        """Temporary compatibility view, not the reason for restricted execution."""
+        return not self.action_eligible
 
 
 @dataclass(slots=True)
@@ -34,3 +65,4 @@ class CommandContext:
     source: str = "voice"
     raw_text: str = ""
     normalized_text: str = ""
+    turn_id: str | None = None

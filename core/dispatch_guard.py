@@ -9,6 +9,10 @@ class DispatchGuard:
         self._sequence = 0
         self.pending: set[str] = set()
 
+    @property
+    def session_id(self) -> str:
+        return self._session
+
     def issue(self):
         if len(self.pending) >= self.capacity:
             raise RuntimeError("Too many pending turn dispatches")

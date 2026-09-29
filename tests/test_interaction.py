@@ -99,6 +99,54 @@ class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CommandProcessorModeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_envelope_preserves_existing_action_gate_and_repeat_choice(self):
+        from core.models import TurnEnvelope
+        self.router.responses['тест'] = SkillResult(True, 'local-result')
+        self.llm.converse = AsyncMock(return_value=SimpleNamespace(kind='chat', response='safe-chat'))
+        for text in ('Команда: тест', 'звичайна репліка'):
+            for eligible, repeat in ((True, False), (False, False), (False, True)):
+                expected = await self.processor.process(text, AsyncMock(), 'voice',
+                    allow_actions=eligible, incomplete_input=repeat)
+                turn = TurnEnvelope(turn_id='fixture:1', session_id='fixture', source='voice',
+                    text=text, transcript=text, stt_engine='vosk', confidence=.9,
+                    action_eligible=eligible, clarification_required=repeat,
+                    # Complete yet unreliable speech may still require repetition.
+                    utterance_incomplete=False, recognition_unreliable=not eligible)
+                actual = await self.processor.process(turn, AsyncMock())
+                self.assertEqual(actual.response, expected.response)
+                self.assertEqual(actual.data, expected.data)
+
+    async def test_operational_turn_id_reaches_real_processor_and_command_context(self):
+        from core.performance import TurnTiming, DISABLED_PERFORMANCE
+        from core.models import TurnEnvelope
+        app = object.__new__(ValleRaApp)
+        app.command_queue = asyncio.Queue()
+        app.command_idle = asyncio.Event()
+        app.running = True
+        app.web_ui = None
+        app.settings = SimpleNamespace(stt_command_confidence_threshold=.55, stt_chat_confidence_threshold=.5)
+        app.services = self.services
+        app.speaker = SimpleNamespace(say=AsyncMock(), generation=0)
+        app.confirmation = SimpleNamespace(ask=AsyncMock())
+        app.processor = self.processor
+        self.router.responses['тест'] = SkillResult(True)
+        self.processor.process = AsyncMock(wraps=self.processor.process)
+        timing = TurnTiming(DISABLED_PERFORMANCE)
+        turn = await app._enqueue_command('Команда: тест', 'voice', .97,
+            recognition=RecognitionResult('Команда: тест', .97, 'whisper', timing=timing))
+        task = asyncio.create_task(app._command_loop())
+        try:
+            await asyncio.wait_for(app.command_queue.join(), 1)
+            self.assertIsInstance(turn, TurnEnvelope)
+            self.processor.process.assert_awaited_once_with(turn, app.confirmation.ask)
+            self.assertIs(self.processor.process.await_args.args[0], turn)
+            self.assertEqual(self.router.contexts[0].turn_id, turn.turn_id)
+            self.assertEqual(self.router.contexts[0].source, turn.source)
+            self.assertFalse(app._dispatch_guard.pending)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     def setUp(self):
         self.router = _Router()
         self.llm = _LLM()
@@ -367,8 +415,12 @@ class AppCommandLoopTests(unittest.IsolatedAsyncioTestCase):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-        self.assertEqual(queued[:6], ("як твої справи", "voice", 0.91, None, False, False))
-        self.assertIn(queued[6], app._dispatch_guard.pending)
+        self.assertEqual(queued.text, "як твої справи")
+        self.assertEqual(queued.source, "voice")
+        self.assertEqual(queued.confidence, .91)
+        self.assertEqual(queued.stt_engine, 'vosk')
+        self.assertTrue(queued.action_eligible)
+        self.assertIn(queued.turn_id, app._dispatch_guard.pending)
         self.assertEqual(
             app.listener.listen_once.call_args_list,
             [

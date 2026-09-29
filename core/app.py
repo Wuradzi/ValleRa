@@ -5,6 +5,7 @@ import logging
 import math
 import threading
 import time
+from dataclasses import replace
 
 from core.command_router import CommandRouter
 from core.confirmation import ConfirmationService
@@ -12,7 +13,7 @@ from core.dispatch_guard import DispatchGuard
 from core.listen import VoskListener
 from core.metrics import MetricsCollector
 from core.performance import CURRENT_TURN, DISABLED_PERFORMANCE, PerformanceRecorder, TurnTiming
-from core.models import RecognitionResult
+from core.models import RecognitionResult, TurnEnvelope
 from core.console import correlated_console_input, console_print
 from core.processor import COMMAND_PREFIX, STOP_SPEECH, PAUSE_CONVERSATION, CommandProcessor
 from core.security import redact_user_text, scrub_sensitive_environment
@@ -43,12 +44,7 @@ class ValleRaApp:
     def __init__(self, settings, secret_store, text_only: bool = False, *, performance=None):
         self.settings = settings
         self.text_only = text_only
-        # Last field is an issued, single-use operational turn ID (not a transcript).
-        self.command_queue: asyncio.Queue[
-            tuple[str, str, float, TurnTiming | None, bool, bool, str]
-        ] = asyncio.Queue(
-            maxsize=1
-        )
+        self.command_queue: asyncio.Queue[TurnEnvelope] = asyncio.Queue(maxsize=1)
         self.metrics = MetricsCollector(settings.paths.data_dir / "metrics.jsonl")
         self.performance = performance or PerformanceRecorder(self.metrics)
         self.speaker = Speaker(settings)
@@ -292,32 +288,48 @@ class ValleRaApp:
         except Exception:
             logger.exception("Update check failed")
 
-    async def _enqueue_command(self, text, source, confidence, timing=None, fragmented=False, incomplete=False):
+    async def _enqueue_command(self, text: str, source: str, confidence: float, *,
+                               recognition: RecognitionResult | None = None) -> TurnEnvelope:
         # Created once at ingress, retained by every delivery of this queue item.
         if not hasattr(self, "_dispatch_guard"):
             self._dispatch_guard = DispatchGuard()
         turn_id = self._dispatch_guard.issue()
+        turn = TurnEnvelope(
+            turn_id=turn_id, session_id=self._dispatch_guard.session_id,
+            source=source, text=text, transcript=recognition.text if recognition is not None else text,
+            stt_engine=recognition.engine if recognition is not None else ('text' if source == 'text' else 'unknown'),
+            confidence=confidence,
+            utterance_incomplete=(recognition.utterance_incomplete if recognition.utterance_incomplete is not None
+                                  else recognition.incomplete) if recognition is not None else False,
+            capture_truncated=recognition.capture_truncated if recognition is not None else False,
+            recognition_unreliable=recognition.recognition_unreliable if recognition is not None else False,
+            action_eligible=not recognition.fragmented if recognition is not None else True,
+            clarification_required=recognition.incomplete if recognition is not None else False,
+            timing=recognition.timing if recognition is not None else None,
+        )
         try:
-            await self.command_queue.put((text, source, confidence, timing, fragmented, incomplete, turn_id))
+            await self.command_queue.put(turn)
         except BaseException:
             self._dispatch_guard.discard(turn_id)
             raise
+        return turn
 
     async def _command_loop(self) -> None:
         while self.running:
-            item = await self.command_queue.get()
+            turn = await self.command_queue.get()
             guard = getattr(self, "_dispatch_guard", None)
-            if len(item) != 7 or guard is None or not guard.claim(item[6]):
+            if not isinstance(turn, TurnEnvelope) or guard is None or not guard.claim(turn.turn_id):
                 logger.warning("turn_dispatch_rejected=duplicate_or_unissued")
                 self.command_queue.task_done()
                 if self.command_queue.empty():
                     self.command_idle.set()
                 continue
-            logger.debug("turn_dispatch_claimed operational_turn_id=%s", item[6])
-            text, source, confidence = item[:3]
-            timing = item[3] if len(item) > 3 else None
+            logger.debug("turn_dispatch_claimed operational_turn_id=%s", turn.turn_id)
+            text, source, confidence = turn.text, turn.source, turn.confidence
+            timing = turn.timing
             if timing is None:
                 timing = TurnTiming(getattr(self, "performance", DISABLED_PERFORMANCE))
+                turn = replace(turn, timing=timing)
             token = CURRENT_TURN.set(timing)
             speech_token = SPEECH_SCOPE.set((self.speaker, getattr(self.speaker, "generation", 0)))
             timing.mark("dispatch")
@@ -344,11 +356,8 @@ class ValleRaApp:
                         continue
 
                 result = await self.processor.process(
-                    text,
+                    turn,
                     self.confirmation.ask,
-                    source,
-                    **({"allow_actions": False, "incomplete_input": bool(item[5]) if len(item) > 5 else False}
-                       if len(item) > 4 and item[4] else {}),
                 )
                 if self.web_ui is not None:
                     if result.data.get("command_type") == "conversation_new":
@@ -445,8 +454,7 @@ class ValleRaApp:
                 self.command_idle.clear()
                 if self.web_ui is not None:
                     self.web_ui.publish("user", repaired_text, source="voice")
-                await self._enqueue_command(repaired_text, "voice", result.confidence, result.timing,
-                                            result.fragmented, result.incomplete)
+                await self._enqueue_command(repaired_text, "voice", result.confidence, recognition=result)
             except FileNotFoundError as exc:
                 self._voice_error = True
                 self._voice_unavailable = True

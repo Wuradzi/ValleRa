@@ -1595,7 +1595,8 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(app.command_queue.empty())
         app.confirmation.submit.return_value = False
         await app._submit_text('Нове питання')
-        self.assertEqual((await app.command_queue.get())[:3], ('Нове питання', 'text', 1.0))
+        turn = await app.command_queue.get()
+        self.assertEqual((turn.text, turn.source, turn.confidence), ('Нове питання', 'text', 1.0))
 
     async def test_confirmation_started_during_stop_rejects_uncorrelated_reply(self):
         from core.app import ValleRaApp
@@ -1633,8 +1634,8 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         app.confirmation = SimpleNamespace(submit=Mock(return_value=False), ask=AsyncMock(), awaiting=False,
                                           wait_until_requested=never_confirm)
         started, finish = asyncio.Event(), asyncio.Event()
-        async def process(text, *args):
-            if text == 'Команда: пошук':
+        async def process(turn, *args):
+            if turn.text == 'Команда: пошук':
                 started.set()
                 await finish.wait()
                 return SkillResult(True, 'Застаріла відповідь.')
