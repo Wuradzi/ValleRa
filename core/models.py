@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 from core.performance import TurnTiming
+from core.execution_result import ExecutionResult
 
 
 ConfirmationCallback = Callable[[str], Awaitable[bool]]
@@ -55,6 +56,11 @@ class SkillResult:
     handled: bool
     response: str = ""
     data: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def execution(self) -> ExecutionResult:
+        """Compatibility view; preserve legacy data and user-facing response."""
+        return ExecutionResult.from_data(self.data)
 
 
 @dataclass(slots=True)

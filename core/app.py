@@ -14,6 +14,7 @@ from core.listen import VoskListener
 from core.metrics import MetricsCollector
 from core.performance import CURRENT_TURN, DISABLED_PERFORMANCE, PerformanceRecorder, TurnTiming
 from core.models import RecognitionResult, TurnEnvelope
+from core.recognition_policy import RecognitionPolicy
 from core.console import correlated_console_input, console_print
 from core.processor import COMMAND_PREFIX, STOP_SPEECH, PAUSE_CONVERSATION, CommandProcessor
 from core.security import redact_user_text, scrub_sensitive_environment
@@ -131,7 +132,7 @@ class ValleRaApp:
             settings, router, self.llm, self.speaker, self.metrics, services
         )
         if self.listener is not None:
-            self.listener.scoped_reply = self.processor.stt_scoped_reply
+            self.listener.recognition_policy.dialogue = self.processor.dialogue_state
         self.confirmation = ConfirmationService(
             self._say_confirmation,
             settings.confirmation_timeout_seconds,
@@ -303,7 +304,7 @@ class ValleRaApp:
                                   else recognition.incomplete) if recognition is not None else False,
             capture_truncated=recognition.capture_truncated if recognition is not None else False,
             recognition_unreliable=recognition.recognition_unreliable if recognition is not None else False,
-            action_eligible=not recognition.fragmented if recognition is not None else True,
+            action_eligible=RecognitionPolicy.action_eligible(recognition) if recognition is not None else True,
             clarification_required=recognition.incomplete if recognition is not None else False,
             timing=recognition.timing if recognition is not None else None,
         )

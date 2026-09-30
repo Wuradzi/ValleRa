@@ -21,6 +21,44 @@ from services.llm.errors import ResponseError
 
 
 class IntentValidationTests(unittest.TestCase):
+    def test_typed_execution_states_do_not_infer_success(self):
+        from core.execution_result import ExecutionStatus
+        cases = [
+            ({'accepted': False}, ExecutionStatus.REJECTED),
+            ({'status': 'cancelled', 'accepted': False}, ExecutionStatus.CANCELLED),
+            ({'accepted': True}, ExecutionStatus.SUBMITTED),
+            ({'accepted': True, 'verified': False, 'success': False}, ExecutionStatus.SUBMITTED_UNVERIFIED),
+            ({'status': 'failed'}, ExecutionStatus.FAILED),
+            ({'accepted': True, 'verified': True, 'success': True}, ExecutionStatus.VERIFIED),
+            ({}, ExecutionStatus.UNKNOWN),
+        ]
+        for data, status in cases:
+            with self.subTest(data=data):
+                result = SkillResult(True, 'fixture', dict(data))
+                self.assertEqual(result.execution.status, status)
+                self.assertEqual(result.execution.success, data.get('success'))
+                self.assertEqual(result.execution.verified, data.get('verified'))
+                self.assertEqual(result.data, data)
+
+    def test_action_policy_keeps_identity_scope_and_quality_separate(self):
+        from core.action_policy import natural_action_permission, PolicyOutcome, turn_permission
+        from core.dialogue_decision import DialogueDecision, DecisionKind
+        intent = CommandIntent('open_app', {'name': 'браузер'})
+        for kind in DecisionKind:
+            candidate = DialogueDecision(kind, intent=intent, turn_id='session:7')
+            permission = natural_action_permission(candidate, 'відкрий браузер', 'відкрий браузер', None, False)
+            self.assertEqual(permission.turn_id, 'session:7')
+            self.assertEqual(permission.outcome, PolicyOutcome.ALLOW if kind is DecisionKind.ACTION_CANDIDATE
+                             else PolicyOutcome.SAFE_NO_ACTION)
+        candidate = DialogueDecision(DecisionKind.ACTION_CANDIDATE, intent=intent, turn_id='session:7')
+        self.assertEqual(natural_action_permission(candidate, 'відкрий браузер', 'відкрий браузер',
+                         None, False, action_eligible=False).outcome, PolicyOutcome.SAFE_NO_ACTION)
+        self.assertEqual(natural_action_permission(candidate, 'я користуюсь браузером',
+                         'я користуюсь браузером', None, False).outcome, PolicyOutcome.CLARIFY)
+        self.assertEqual(turn_permission(False, True), PolicyOutcome.CLARIFY)
+        self.assertEqual(turn_permission(False, False), PolicyOutcome.SAFE_NO_ACTION)
+        self.assertEqual(turn_permission(False, True, stop=True), PolicyOutcome.ALLOW)
+
     def test_supported_contracts(self):
         examples = [
             ("find_files", {"query": "диплом", "extension": ".pdf"}),
@@ -180,12 +218,15 @@ class IntentExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.confirm.side_effect = confirm
         result = await execute_intent(CommandIntent("open_app", {"name": "браузер"}), self.context)
         self.assertTrue(result.data["accepted"])
+        self.assertFalse(result.execution.verified)
+        self.assertFalse(result.execution.success)
         self.apps.open_default_browser.assert_called_once()
 
     async def test_denial_never_executes(self):
         self.confirm.return_value = False
         result = await execute_intent(CommandIntent("open_app", {"name": "браузер"}), self.context)
         self.assertEqual(result.data["command_type"], "interpretation_cancelled")
+        self.assertEqual(result.execution.status.value, 'cancelled')
         self.apps.open_default_browser.assert_not_called()
 
     async def test_cancelled_approval_cannot_be_reused_by_next_action(self):

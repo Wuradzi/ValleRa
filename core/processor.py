@@ -6,6 +6,9 @@ import re
 import time
 
 from core.models import CommandContext, SkillResult, TurnEnvelope
+from core.recognition_policy import DialogueState
+from core.dialogue_decision import DialogueDecision, DecisionKind
+from core.action_policy import PolicyOutcome, turn_permission, natural_action_permission
 from core.command_actions import execute_intent
 from core.command_intent import CommandIntent, InterpretationUnavailable, MULTI_ACTION, can_interpret, preserves_search_intent
 from core.command_catalog import chat_catalog, local_intent_candidates
@@ -115,7 +118,9 @@ class CommandProcessor:
         normalized = self._normalize(raw_text)
         state = self.services["state"]
         mode = state.get("mode", "chat")
-        if not allow_actions and not STOP_SPEECH.fullmatch(raw_text):
+        permission = turn_permission(allow_actions, incomplete_input,
+                                     stop=bool(STOP_SPEECH.fullmatch(raw_text)))
+        if permission is not PolicyOutcome.ALLOW:
             # STT continuation is context, never authority for a tool or a pending
             # selection. Require a fresh complete request before normal approval.
             self._natural_pending = None
@@ -150,6 +155,10 @@ class CommandProcessor:
         local_command = self._normalize(local_raw) if local_raw is not None else None
         control = (DIALOGUE_CONTROLS.get(normalized.rstrip('.!?'))
                    if mode == "chat" and command_match is None else None)
+        decision = DialogueDecision(
+            DecisionKind.LOCAL_COMMAND if command_match else
+            DecisionKind.CONTROL if control else DecisionKind.CHAT,
+            turn_id=input_turn.turn_id if input_turn is not None else None)
         if command_match or control or PAUSE_CONVERSATION.fullmatch(raw_text) or STOP_SPEECH.fullmatch(raw_text):
             self._natural_pending = None
         context = CommandContext(
@@ -191,7 +200,7 @@ class CommandProcessor:
                         {"pentest"},
                         raw_command=raw_text,
                     )
-            elif command_match:
+            elif decision.kind is DecisionKind.LOCAL_COMMAND:
                 if (WORKPLACE.fullmatch(local_raw) or CONFIGURE_WORKPLACE.fullmatch(local_raw) or WORK_MODE.fullmatch(local_raw)
                         or TASK_STATUS.fullmatch(local_raw) or TASK_RETRY.fullmatch(local_raw)):
                     result = await self._route_local(local_command, context, {"workplace"}, raw_command=local_raw)
@@ -386,16 +395,24 @@ class CommandProcessor:
         )
         return result
 
+    @property
+    def dialogue_state(self):
+        # Lazy creation retains direct object.__new__ diagnostic fixtures.
+        if not hasattr(self, '_dialogue_state'):
+            self._dialogue_state = DialogueState(self.services)
+        return self._dialogue_state
+
+    @property
+    def _natural_pending(self):
+        return self.dialogue_state.pending
+
+    @_natural_pending.setter
+    def _natural_pending(self, pending):
+        self.dialogue_state.pending = pending
+
     def stt_scoped_reply(self, text):
-        """Read-only STT hint; never consumes or authorizes the pending task."""
-        pending = self._natural_pending
-        if not (pending and time.monotonic() < pending['expires']
-                and pending.get('tool') in {'open_app', 'window_control'}
-                and short_clarification(text) and not direct_request(voice_request(text), '')):
-            return False
-        name = application_name_reply(text)
-        exact = getattr(self.services.get('apps'), 'has_exact_name', None)
-        return bool(name and callable(exact) and exact(name))
+        """Compatibility for probes; audio never calls the processor."""
+        return self.dialogue_state.scoped_reply(text)
 
     async def _natural_turn(self, text, normalized, context, web_context):
         pending = self._natural_pending
@@ -490,35 +507,16 @@ class CommandProcessor:
             return SkillResult(True, "", {"command_type": "chat_interrupted"})
         finally:
             self._chat_task = None  # Local operations must not be cancelled by conversation interruption.
-        logger.info("Natural decision kind=%s tool=%s scoped=%s", turn.kind,
+        turn = DialogueDecision.from_natural(turn, context.turn_id)
+        logger.info("Natural decision kind=%s tool=%s scoped=%s", turn.kind.value,
                     turn.intent.tool if turn.intent is not None else None, scoped)
         if turn.kind == "action":
             self._reply_interrupted = False
-            intent = turn.intent
-            expected_scope = pending["tool"] if scoped else request_scope(request)
-            if intent is not None and expected_scope and intent.tool != expected_scope:
-                return SkillResult(True, "Запропонована дія не відповідає типу вашого запиту. Уточніть прохання; нічого не виконано.",
+            permission = natural_action_permission(turn, request, text, pending, scoped)
+            if permission.outcome is not PolicyOutcome.ALLOW:
+                return SkillResult(True, permission.response,
                                    {"command_type": "intent_clarification", "success": False})
-            if (intent is not None and intent.tool == "open_app" and pending is not None
-                    and time.monotonic() < pending["expires"] and not direct_request(text, intent.tool)):
-                name = application_name_reply(text)
-                if name is not None:
-                    # Only the current user's literal name, never a name invented from old context.
-                    intent = CommandIntent("open_app", {"name": name})
-                elif scoped:
-                    return SkillResult(True, "Назвіть, будь ласка, програму, яку відкрити.",
-                                       {"command_type": "intent_clarification", "success": False})
-            else:
-                pending = None
-            if intent is None or (not direct_request(request, intent.tool)
-                                  and not scoped
-                                  and not (pending and application_name_reply(text) is not None)):
-                self._reply_interrupted = False
-                return SkillResult(True, "Не впевнений, що це пряме прохання виконати дію. Уточніть, будь ласка; нічого не виконано.",
-                                   {"command_type": "intent_clarification", "success": False})
-            if not preserves_search_intent(request, intent):
-                return SkillResult(True, "Уточніть точний запит пошуку: не можу надійно зберегти його зміст.",
-                                   {"command_type": "intent_clarification", "success": False})
+            intent = permission.intent
             result = await asyncio.wait_for(execute_intent(intent, context), timeout=120)
             result.data["natural_action"] = True
             self._reply_interrupted = False

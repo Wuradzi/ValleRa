@@ -19,6 +19,15 @@ from config import Settings, ProjectPaths
 
 
 class HybridRecognitionTests(unittest.TestCase):
+    def test_audio_uses_policy_without_processor_callback(self):
+        import inspect
+        from core.recognition_policy import RecognitionPolicy, DialogueState
+        source = inspect.getsource(VoskListener)
+        for dependency in ('direct_request', 'voice_request', 'stt_scoped_reply', 'self.scoped_reply'):
+            self.assertNotIn(dependency, source)
+        self.assertIsInstance(self.listener.recognition_policy, RecognitionPolicy)
+        self.assertIsInstance(self.listener.recognition_policy.dialogue, DialogueState)
+
     def setUp(self):
         self.listener = object.__new__(VoskListener)
         self.listener.settings = SimpleNamespace(
@@ -163,7 +172,7 @@ class SelectiveRefinementTests(unittest.TestCase):
         for text in ('так', 'ні', 'гаразд'):
             self.capture(text)
             self.assertEqual(self.listener.listen_once(grammar=['так', 'ні', 'гаразд']).engine, 'vosk')
-        self.listener.scoped_reply = lambda text: text == 'Telegram'
+        self.listener.recognition_policy.dialogue.scoped_reply = lambda text: text == 'Telegram'
         self.capture('Telegram')
         self.assertEqual(self.listener._should_refine(RecognitionResult('Telegram', .96), self.pcm, 16000),
                          (False, 'scoped_context'))

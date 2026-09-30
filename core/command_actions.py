@@ -1,6 +1,8 @@
 """The only executor for model-proposed actions: validate, preview, confirm."""
 from __future__ import annotations
 
+import logging
+
 from core.command_intent import InvalidIntent, validate_intent
 from core.models import SkillResult
 from core.command_catalog import TOOL_SKILLS, command_help
@@ -8,6 +10,16 @@ from core.confirmation import confirm_action
 
 
 async def execute_intent(intent, context):
+    """Legacy SkillResult API with an explicit, non-inferred evidence boundary."""
+    result = await _execute_intent(intent, context)
+    evidence = result.execution
+    logging.getLogger(__name__).debug(
+        'Execution result turn_id=%s status=%s accepted=%s success=%s verified=%s',
+        context.turn_id, evidence.status.value, evidence.accepted, evidence.success, evidence.verified)
+    return result
+
+
+async def _execute_intent(intent, context):
     # Treat even an adapter's CommandIntent object as untrusted at this boundary.
     try:
         intent = validate_intent({"tool": intent.tool, "arguments": intent.arguments})

@@ -99,6 +99,55 @@ class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CommandProcessorModeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_natural_boundaries_keep_turn_id_and_confirm_before_single_execution(self):
+        from core.natural_turn import NaturalTurn
+        from core.command_intent import CommandIntent
+        from core.models import TurnEnvelope
+        from core.action_policy import natural_action_permission
+        self.processor.settings.natural_actions_enabled = True
+        self.services['enabled_skills'] = {'apps'}
+        app_open = Mock(return_value=True)
+        self.services['apps'] = SimpleNamespace(open_default_browser=app_open)
+        self.speaker.say = AsyncMock()
+        self.llm.active_name = 'fixture'
+        self.llm.converse = AsyncMock(return_value=NaturalTurn(
+            'action', intent=CommandIntent('open_app', {'name': 'браузер'})))
+        turn = TurnEnvelope(turn_id='fixture:91', session_id='fixture', source='text',
+                            text='відкрий браузер', transcript='відкрий браузер',
+                            stt_engine='text', confidence=1)
+
+        async def confirm(_):
+            app_open.assert_not_called()
+            return True
+
+        with patch('core.processor.natural_action_permission', wraps=natural_action_permission) as policy:
+            result = await self.processor.process(turn, AsyncMock(side_effect=confirm))
+        self.assertEqual(policy.call_args.args[0].turn_id, turn.turn_id)
+        self.assertEqual(result.execution.status.value, 'submitted_unverified')
+        app_open.assert_called_once()
+        self.assertEqual(self.router.commands, [])
+
+    async def test_chat_clarify_and_unreliable_candidate_never_reach_executor(self):
+        from core.natural_turn import NaturalTurn
+        from core.command_intent import CommandIntent
+        from core.models import TurnEnvelope
+        self.processor.settings.natural_actions_enabled = True
+        self.speaker.say = AsyncMock()
+        self.llm.active_name = 'fixture'
+        for kind in ('chat', 'clarify', 'action'):
+            self.llm.converse = AsyncMock(return_value=NaturalTurn(
+                kind, 'fixture response', CommandIntent('open_app', {'name': 'браузер'}) if kind == 'action' else None))
+            turn = TurnEnvelope(turn_id='fixture:' + kind, session_id='fixture', source='voice',
+                                text='звичайна репліка', transcript='звичайна репліка',
+                                stt_engine='vosk', confidence=.9,
+                                action_eligible=kind != 'action', recognition_unreliable=kind == 'action')
+            approval = AsyncMock(return_value=True)
+            with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+                await self.processor.process(turn, approval)
+                execute.assert_not_awaited()
+            approval.assert_not_awaited()
+        self.assertEqual(self.router.commands, [])
+
     async def test_envelope_preserves_existing_action_gate_and_repeat_choice(self):
         from core.models import TurnEnvelope
         self.router.responses['тест'] = SkillResult(True, 'local-result')

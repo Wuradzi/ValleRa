@@ -1,5 +1,57 @@
 # Архітектура ValleRa
 
+## Phase 3A: core boundaries (30.09.2026)
+
+Це extraction чинних правил, не нова policy. Потік:
+
+`listen → RecognitionResult → app → TurnEnvelope/dispatch guard → processor
+→ DialogueDecision → ActionPermission → execute_intent → SkillResult.execution`.
+
+- `RecognitionPolicy` володіє колишніми refinement/engine-selection правилами
+  listener і compatibility mapping `fragmented → action_eligible`. Audio зберігає
+  capture, endpoint/Fragment Guard, energy evidence, Whisper wait і timing.
+  Прямих `direct_request`, `voice_request`, callback до processor у listener немає.
+  Listener ще звертається до policy під час refinement: це навмисна compatibility
+  межа, не повністю двофазний STT. Пороги, timeout та порядок short-circuit ті самі.
+- `DialogueState` володіє pending natural clarification та read-only scoped hint;
+  app з'єднує його з recognition policy. Hint перевіряє той самий каталог/expiry,
+  не споживає pending і не дозволяє execution. Confirmation та TaskContext окремі.
+- `DialogueDecision` позначає CHAT/CLARIFY/ACTION_CANDIDATE/LOCAL_COMMAND/CONTROL.
+  NaturalTurn від LLM адаптується без зміни prompt/decoder, operational ID копіюється
+  з CommandContext. `ActionPermission` зберігає цей ID і ALLOW/CLARIFY/SAFE_NO_ACTION.
+- `turn_permission` зберігає pre-routing eligibility gate і stop exception.
+  `natural_action_permission` зберігає scope/direct-request/literal-target/search
+  checks модельної пропозиції. ALLOW лише допускає до executor, не замінює
+  validation, confirmation, verification. Exact local routes залишені як були.
+- `ExecutionResult` — read-only typed view `SkillResult.data`, не новий результат
+  tools. REJECTED/CANCELLED/SUBMITTED/FAILED/VERIFIED/SUBMITTED_UNVERIFIED/UNKNOWN
+  розрізняються. accepted, success, verified незалежні; відсутнє evidence = None.
+  Executor логуює технічний статус/turn ID без action arguments чи transcript.
+
+Processor усе ще координує routing, cancellation LLM task, streaming response,
+контекст уточнення, локальні shortcut branches і підготовку відповіді. Не винесено
+tools, confirmation, platform реалізації, TTS, memory або весь dialogue state machine.
+Нові contracts не містять Windows API чи platform-specific типів.
+
+Сумісність: RecognitionResult flags, TurnEnvelope.fragmented, process(str),
+SkillResult/data, listener `_select_result`/`_should_refine`/prefix probe та processor
+`stt_scoped_reply`/`_natural_pending` залишені для існуючих probes/tests. Останній
+callback не використовується audio. Нових operational IDs не генерується.
+
+Відомі старі обмеження (не виправлялися): processor metrics досі використовують
+`success` з fallback на `accepted`/True; це не незалежний доказ виконання.
+`recognition_unreliable` — provenance, а не самостійний новий authorization gate:
+runtime зберігає compatibility eligibility через fragmented і окрему conflict
+перевірку app. Довільно сконструйований суперечливий envelope не є новим policy
+контрактом. Повну заміну legacy flags слід погоджувати окремо.
+
+Перевірка: targeted 325/325, full 580/580 через tester.py; Ruff/diff чисті.
+Додано 5 boundary tests і розширено confirmation/execution assertions. Наявні
+tests покривають scoped replies, deny/cancel, dedup, stale epoch, direct routes.
+Це offline mocks, не живий голос чи запуск програм. Live smoke Phase 2/3A ще потрібен.
+Phase 3B: можна окремо вводити platform adapters, не змінюючи ці contracts;
+кросплатформна реалізація ще не заявляється завершеною.
+
 ## Typed turn transport
 
 `core.models.TurnEnvelope` — frozen/slots dataclass, immutable snapshot одного
