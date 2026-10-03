@@ -53,6 +53,7 @@ GROUPS = {
 }
 
 PROBES = {
+    "stt_benchmark": ("Offline WAV benchmark: Vosk/faster-whisper; без LLM/мережі/мікрофона", "run"),
     "workplace": ("Читання профілю, індексу й вікон Windows; без запуску програм/мережі/мікрофона", "run"),
     "tts": ("Живий Windows TTS: PCM, зупинка, повторний запуск; без API/мікрофона", "run"),
     "gemini": ("Перевірка Gemini; --web-summary для вебпідсумку; витрачає API-квоту", "main"),
@@ -72,7 +73,13 @@ def probe_options(name, argv):
     """Parse centrally, before importing optional or native dependencies."""
     parser = argparse.ArgumentParser(prog=f"tester.py --probe {name} --",
                                      description=PROBES[name][0])
-    if name == "gemini":
+    if name == 'stt_benchmark':
+        parser.add_argument('--corpus', type=Path, required=True)
+        parser.add_argument('--models', nargs='+', default=['vosk', 'large-v3', 'large-v3-turbo'],
+                            choices=['vosk', 'tiny', 'base', 'small', 'large-v3', 'large-v3-turbo'])
+        parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
+        parser.add_argument('--variant-timeout', type=int, default=600)
+    elif name == "gemini":
         parser.add_argument("--connection-comparison", action="store_true",
                             help="6 нейтральних API-запитів: новий клієнт проти keep-alive, без історії")
         parser.add_argument("--extended", action="store_true", help="Два додаткові різнотематичні запити для --live-web")

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class WhisperRecognizer:
-    """Lazy local Whisper recognizer used to refine unrestricted Vosk text."""
+    """Lazy local Whisper decoder shared by primary STT and legacy refinement."""
 
     def __init__(self, settings):
         self.settings = settings
@@ -30,6 +30,9 @@ class WhisperRecognizer:
         self.skipped_silence = 0
         self.last_duration_seconds = 0.0
         self.last_timings: dict[str, float] = {}
+        self.actual_device = settings.stt_whisper_device
+        self.actual_compute_type = settings.stt_whisper_compute_type
+        self._forced_cpu = False
 
     @contextmanager
     def _measure(self, stage):
@@ -93,6 +96,7 @@ class WhisperRecognizer:
             segments, info = model.transcribe(
                 audio,
                 language=self.settings.language,
+                task='transcribe',
                 beam_size=self.settings.stt_whisper_beam_size,
                 vad_filter=True,
                 vad_parameters={
@@ -111,9 +115,13 @@ class WhisperRecognizer:
             self.last_error = ""
             return RecognitionResult(text, confidence, "whisper")
         except Exception as exc:
+            if self.actual_device == 'cuda' and not self._forced_cpu:
+                logger.warning('stt.fallback reason=cuda_inference_failed target=cpu error=%s', type(exc).__name__)
+                self._forced_cpu, self._model = True, None
+                return self.transcribe(pcm, sample_rate)
             self.last_error = str(exc)
             self._retry_after = time.monotonic() + 60.0
-            logger.exception("Whisper transcription failed; keeping Vosk result")
+            logger.exception("Whisper transcription failed; caller owns fallback policy")
             return RecognitionResult("", 0.0, "whisper")
 
     def _get_model(self):
@@ -142,23 +150,41 @@ class WhisperRecognizer:
             with self._measure("whisper.resolve_files"):
                 source = resolve_model(
                     self.settings.stt_whisper_model, model_dir, download_model,
-                    local_files_only=getattr(self.settings, "benchmark_local_files_only", False),
+                    local_files_only=getattr(self.settings, 'stt_whisper_local_files_only',
+                                             getattr(self.settings, "benchmark_local_files_only", False)),
                 )
             with self._measure("whisper.load_weights"):
-                self._model = WhisperModel(
-                    source,
-                    device=self.settings.stt_whisper_device,
-                    compute_type=self.settings.stt_whisper_compute_type,
-                    cpu_threads=self.settings.stt_whisper_cpu_threads,
-                    download_root=str(model_dir),
-                )
+                device = 'cpu' if self._forced_cpu else self.settings.stt_whisper_device
+                if device == 'auto':
+                    from ctranslate2 import get_cuda_device_count
+                    try:
+                        device = 'cuda' if get_cuda_device_count() else 'cpu'
+                    except RuntimeError:
+                        device = 'cpu'
+                    if device == 'cpu':
+                        logger.info('stt.fallback reason=cuda_unavailable target=cpu')
+                compute = self.settings.stt_whisper_compute_type
+                if compute == 'auto' or self._forced_cpu:
+                    compute = 'float16' if device == 'cuda' else 'int8'
+                try:
+                    self._model = WhisperModel(source, device=device, compute_type=compute,
+                        cpu_threads=self.settings.stt_whisper_cpu_threads, download_root=str(model_dir))
+                except (RuntimeError, ValueError):
+                    if device != 'cuda':
+                        raise
+                    logger.warning('stt.fallback reason=cuda_load_failed target=cpu')
+                    device, compute, self._forced_cpu = 'cpu', 'int8', True
+                    self._model = WhisperModel(source, device=device, compute_type=compute,
+                        cpu_threads=self.settings.stt_whisper_cpu_threads, download_root=str(model_dir))
+                self.actual_device, self.actual_compute_type = device, compute
+                logger.info('stt.backend=faster-whisper model=%s language=%s device=%s compute_type=%s task=transcribe',
+                            self.settings.stt_whisper_model, self.settings.language, device, compute)
             self.last_error = ""
             self._retry_after = 0.0
             print(
                 "[STT] Whisper готовий: "
                 f"{self.settings.stt_whisper_model} "
-                f"({self.settings.stt_whisper_device}/"
-                f"{self.settings.stt_whisper_compute_type})."
+                f"({self.actual_device}/{self.actual_compute_type})."
             )
             return self._model
 

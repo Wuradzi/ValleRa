@@ -90,7 +90,7 @@ class AsyncRecorderTests(unittest.IsolatedAsyncioTestCase):
         metrics = Mock()
         app = object.__new__(ValleRaApp)
         app.performance = PerformanceRecorder(metrics)
-        app.settings = SimpleNamespace(stt_whisper_preload=True)
+        app.settings = SimpleNamespace(stt_whisper_preload=True, stt_backend='vosk')
         app.listener = SimpleNamespace(
             _get_model=Mock(),
             whisper=SimpleNamespace(enabled=True, prepare=Mock(return_value=(False, "unavailable"))),
@@ -100,6 +100,15 @@ class AsyncRecorderTests(unittest.IsolatedAsyncioTestCase):
         rows = [call.kwargs for call in metrics.record.call_args_list]
         self.assertEqual([row["stage"] for row in rows], ["startup.vosk_ready", "startup.whisper_ready"])
         self.assertEqual(rows[-1]["status"], "unavailable")
+
+    async def test_primary_stt_preload_does_not_load_vosk(self):
+        app = object.__new__(ValleRaApp)
+        app.settings = SimpleNamespace(stt_whisper_preload=True, stt_backend='faster-whisper')
+        app.listener = SimpleNamespace(_get_model=Mock(),
+            whisper=SimpleNamespace(enabled=True, prepare=Mock(return_value=(True, 'ready'))))
+        await app._prepare_stt()
+        app.listener._get_model.assert_not_called()
+        app.listener.whisper.prepare.assert_called_once()
 
 
 class BackendTimingTests(unittest.TestCase):

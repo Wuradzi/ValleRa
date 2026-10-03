@@ -7,6 +7,13 @@
   "confirmation_timeout_seconds": 15,
   "fuzzy_threshold": 85,
   "stt": {
+    "backend": "faster-whisper",
+    "quality_profile": "quality",
+    "low_resource_model": "base",
+    "primary_device": "auto",
+    "primary_local_files_only": true,
+    "fallback_backend": "none",
+    "primary_timeout_ms": 60000,
     "model_path": "models/vosk-model-small-uk-v3-small",
     "sample_rate": 16000,
     "audio_block_ms": 250,

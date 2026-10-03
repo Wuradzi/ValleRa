@@ -48,6 +48,13 @@ class Settings:
     confirmation_timeout_seconds: int = 15
     fuzzy_threshold: int = 85
     stt_model_path: str = "models/vosk-model-small-uk-v3-small"
+    stt_backend: str = "faster-whisper"
+    stt_quality_profile: str = "quality"
+    stt_low_resource_model: str = "base"
+    stt_primary_device: str = "auto"
+    stt_primary_local_files_only: bool = True
+    stt_fallback_backend: str = "none"
+    stt_primary_timeout_ms: int = 60000
     stt_sample_rate: int = 16000
     stt_audio_block_ms: int = 250
     stt_endpoint_silence_ms: int = 0
@@ -124,6 +131,13 @@ def default_config() -> dict[str, Any]:
         "confirmation_timeout_seconds": 15,
         "fuzzy_threshold": 85,
         "stt": {
+            "backend": "faster-whisper",
+            "quality_profile": "quality",
+            "low_resource_model": "base",
+            "primary_device": "auto",
+            "primary_local_files_only": True,
+            "fallback_backend": "none",
+            "primary_timeout_ms": 60000,
             "model_path": "models/vosk-model-small-uk-v3-small",
             "sample_rate": 16000,
             "audio_block_ms": 250,
@@ -231,6 +245,8 @@ def apply_performance_profile(
     if profile == "fast":
         config["stt"]["whisper"]["beam_size"] = 1
     elif profile == "raspberry_pi":
+        config['stt']['backend'] = 'vosk'
+        config['stt']['quality_profile'] = 'low_resource'
         # Keep the low-memory profile Vosk-only; switching the desktop default
         # to base is not evidence that a second model fits the Pi 3B budget.
         config["stt"]["whisper"]["enabled"] = False
@@ -254,6 +270,21 @@ def apply_performance_profile(
 
 def validate_config(config: dict[str, Any]) -> None:
     try:
+        stt = config['stt']
+        if stt['backend'] not in {'faster-whisper', 'vosk'}:
+            raise ConfigError('stt.backend: faster-whisper або vosk')
+        if stt['quality_profile'] not in {'quality', 'balanced', 'low_resource'}:
+            raise ConfigError('stt.quality_profile: quality, balanced або low_resource')
+        if stt['primary_device'] not in {'auto', 'cpu', 'cuda'}:
+            raise ConfigError('stt.primary_device: auto, cpu або cuda')
+        if stt['fallback_backend'] not in {'none', 'vosk'}:
+            raise ConfigError('stt.fallback_backend: none або vosk')
+        if type(stt['primary_local_files_only']) is not bool:
+            raise ConfigError('stt.primary_local_files_only має бути boolean')
+        if type(stt['primary_timeout_ms']) is not int or not 1000 <= stt['primary_timeout_ms'] <= 300000:
+            raise ConfigError('stt.primary_timeout_ms має бути 1000..300000')
+        if not isinstance(stt['low_resource_model'], str) or not stt['low_resource_model'].strip():
+            raise ConfigError('stt.low_resource_model не може бути порожнім')
         if type(config["commands"]["llm_interpretation"]) is not bool:
             raise ConfigError("commands.llm_interpretation має бути true або false")
         if type(config["commands"]["natural_actions"]) is not bool:
@@ -370,6 +401,13 @@ def load_settings(profile_override: str | None = None) -> Settings:
         confirmation_timeout_seconds=int(config["confirmation_timeout_seconds"]),
         fuzzy_threshold=int(config["fuzzy_threshold"]),
         stt_model_path=config["stt"]["model_path"],
+        stt_backend=config['stt']['backend'],
+        stt_quality_profile=config['stt']['quality_profile'],
+        stt_low_resource_model=config['stt']['low_resource_model'],
+        stt_primary_device=config['stt']['primary_device'],
+        stt_primary_local_files_only=config['stt']['primary_local_files_only'],
+        stt_fallback_backend=config['stt']['fallback_backend'],
+        stt_primary_timeout_ms=config['stt']['primary_timeout_ms'],
         stt_sample_rate=int(config["stt"]["sample_rate"]),
         stt_audio_block_ms=int(config["stt"]["audio_block_ms"]),
         stt_endpoint_silence_ms=int(config["stt"]["endpoint_silence_ms"]),

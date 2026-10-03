@@ -9,6 +9,7 @@ from core.models import CommandContext, SkillResult, TurnEnvelope
 from core.recognition_policy import DialogueState
 from core.dialogue_decision import DialogueDecision, DecisionKind
 from core.action_policy import PolicyOutcome, turn_permission, natural_action_permission
+from core.action_proposal import ReplyKind, proposal_question, needs_proposal
 from core.command_actions import execute_intent
 from core.command_intent import CommandIntent, InterpretationUnavailable, MULTI_ACTION, can_interpret, preserves_search_intent
 from core.command_catalog import chat_catalog, local_intent_candidates
@@ -97,9 +98,12 @@ class CommandProcessor:
         self._reply_truncated = len(text) > 10000
         self._last_reply = text[:10000]
 
-    def interrupt_conversation(self):
+    def interrupt_conversation(self, *, discard_proposal=False):
         """Cancel only tool-free conversation, never a local operation/confirmation."""
+        if discard_proposal:
+            self.dialogue_state.proposals.clear()
         if self._chat_task is not None and not self._chat_task.done():
+            self.dialogue_state.proposals.clear()
             self._chat_task.cancel()
             return True
         return False
@@ -118,6 +122,16 @@ class CommandProcessor:
         normalized = self._normalize(raw_text)
         state = self.services["state"]
         mode = state.get("mode", "chat")
+        proposals = self.dialogue_state.proposals
+        session_id = input_turn.session_id if input_turn is not None else proposals.session_id
+        proposal_lease = proposals.begin_turn(session_id)
+        proposal_generation = proposals.generation
+        proposal_quality = allow_actions and not incomplete_input and not (
+            input_turn is not None and (input_turn.recognition_unreliable
+                                       or input_turn.capture_truncated or input_turn.utterance_incomplete))
+        if (not proposal_quality or self._natural_pending is not None
+                or getattr(self.services.get('tasks'), 'pending', None) is not None):
+            proposal_lease = None
         permission = turn_permission(allow_actions, incomplete_input,
                                      stop=bool(STOP_SPEECH.fullmatch(raw_text)))
         if permission is not PolicyOutcome.ALLOW:
@@ -257,7 +271,9 @@ class CommandProcessor:
                     )
                 elif (control is None and getattr(self.settings, "natural_actions_enabled", False)
                       and callable(getattr(self.llm_manager, "converse", None))):
-                    result = await self._natural_turn(raw_text, normalized, context, web_context)
+                    result = await self._natural_turn(raw_text, normalized, context, web_context,
+                        proposal_lease=proposal_lease, proposal_generation=proposal_generation,
+                        session_id=session_id, proposal_quality=proposal_quality)
                     provider = "local" if result.data.get("natural_action") else self.llm_manager.active_name
                 else:
                     self.conversation_paused = False
@@ -414,7 +430,8 @@ class CommandProcessor:
         """Compatibility for probes; audio never calls the processor."""
         return self.dialogue_state.scoped_reply(text)
 
-    async def _natural_turn(self, text, normalized, context, web_context):
+    async def _natural_turn(self, text, normalized, context, web_context, *, proposal_lease=None,
+                            proposal_generation=None, session_id=None, proposal_quality=True):
         pending = self._natural_pending
         self._natural_pending = None  # Consume once; later chat must not replay an old request.
         request = voice_request(text) if context.source == "voice" else text
@@ -423,6 +440,9 @@ class CommandProcessor:
                       and not direct_request(request, ""))
         if pending and not scoped and pending.get("tool"):
             pending = None
+        if not scoped and not self.dialogue_state.proposals.current(proposal_lease) and needs_proposal(text):
+            return SkillResult(True, 'Уточніть, будь ласка, що саме потрібно зробити.',
+                               {'command_type': 'intent_clarification', 'success': False})
         window = window_request(request) if direct_request(request, "window_control") else None
         if scoped and pending["tool"] == "window_control":
             name = application_name_reply(text)
@@ -495,9 +515,13 @@ class CommandProcessor:
             # Flush its last sentence now, before stream cleanup/history writes.
             await emit(buffer.feed(chunk, final=True))
 
+        proposal_options = {}
+        if self.dialogue_state.proposals.current(proposal_lease):
+            proposal_options['proposal_context'] = proposal_lease.proposal.model_context()
         task = asyncio.create_task(self.llm_manager.converse(
             model_text, self.services["memory"].relevant(normalized),
-            enabled_skills=self.services.get("enabled_skills", set()), web_context=web_context, on_chunk=on_chunk))
+            enabled_skills=self.services.get("enabled_skills", set()), web_context=web_context,
+            on_chunk=on_chunk, **proposal_options))
         self._chat_task = task
         try:
             turn = await task
@@ -507,6 +531,16 @@ class CommandProcessor:
             return SkillResult(True, "", {"command_type": "chat_interrupted"})
         finally:
             self._chat_task = None  # Local operations must not be cancelled by conversation interruption.
+        if turn.kind in {'proposal', 'followup'}:
+            if asyncio.current_task().cancelling():
+                self.dialogue_state.proposals.clear()
+                raise asyncio.CancelledError
+            self._reply_interrupted = False
+            if not proposal_quality or scoped:
+                return SkillResult(True, 'Повторіть повне прохання або уточніть поточний запит; нічого не виконано.',
+                                   {'command_type': 'intent_clarification', 'success': False})
+            return await self._resolve_proposal(turn, text, context, proposal_lease,
+                                                proposal_generation, session_id)
         turn = DialogueDecision.from_natural(turn, context.turn_id)
         logger.info("Natural decision kind=%s tool=%s scoped=%s", turn.kind.value,
                     turn.intent.tool if turn.intent is not None else None, scoped)
@@ -535,6 +569,54 @@ class CommandProcessor:
                                      "request": model_text[:1600] if scoped else request,
                                      "question": answer[:500]}
         return SkillResult(True, answer, {"command_type": "chat", "response_spoken": bool(spoken)})
+
+    async def _resolve_proposal(self, turn, text, context, lease, generation, session_id):
+        proposals = self.dialogue_state.proposals
+        unclear = SkillResult(True, 'Уточніть, будь ласка, яку саме дію ви хочете виконати; нічого не виконано.',
+                              {'command_type': 'intent_clarification', 'success': False})
+        if turn.kind == 'proposal':
+            proposal = proposals.offer(turn.intent, context.turn_id, session_id,
+                                       self.services.get('enabled_skills', set()), generation)
+            if proposal is None:
+                return unclear
+            question = proposal_question(proposal.intent)
+            self._cache_reply(question)
+            return SkillResult(True, question, {'command_type': 'action_proposal'})
+        reply = turn.proposal_reply
+        if not (reply and proposals.current(lease) and reply.proposal_id == lease.proposal.proposal_id):
+            logger.info('Contextual reply rejected: stale_or_missing_proposal')
+            return unclear
+        logger.info('Contextual reply resolution=%s origin_turn=%s turn_id=%s',
+                    reply.kind.value, lease.proposal.origin_turn_id, context.turn_id)
+        if reply.kind is ReplyKind.REJECT:
+            proposals.consume(lease)
+            return SkillResult(True, 'Добре, запропоновану дію не виконую.', {'command_type': 'proposal_rejected'})
+        if reply.kind is ReplyKind.MODIFY:
+            original = proposals.consume(lease)
+            if original is None:
+                return unclear
+            proposal = proposals.offer(CommandIntent(original.tool, dict(reply.arguments)), context.turn_id,
+                                       session_id, self.services.get('enabled_skills', set()), proposals.generation)
+            if proposal is None:
+                return unclear
+            question = proposal_question(proposal.intent)
+            self._cache_reply(question)
+            return SkillResult(True, question, {'command_type': 'action_proposal_modified'})
+        if reply.kind is not ReplyKind.ACCEPT:
+            proposals.consume(lease)
+            return unclear
+        proposal = lease.proposal
+        candidate = DialogueDecision(DecisionKind.ACTION_CANDIDATE, intent=proposal.intent,
+            turn_id=context.turn_id, origin='contextual_followup', proposal_id=proposal.proposal_id)
+        permission = natural_action_permission(candidate, text, text, None, False,
+                                                contextual_proposal=proposal)
+        if permission.outcome is not PolicyOutcome.ALLOW or proposals.consume(lease) is None:
+            return unclear
+        # Same executor, validation, approval and verification as explicit actions.
+        result = await asyncio.wait_for(execute_intent(permission.intent, context), timeout=120)
+        result.data['natural_action'] = True
+        result.data['intent_route'] = 'contextual_followup'
+        return result
 
     async def _route_local(
         self,

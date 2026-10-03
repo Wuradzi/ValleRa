@@ -10,7 +10,7 @@ from dataclasses import replace
 from core.command_router import CommandRouter
 from core.confirmation import ConfirmationService
 from core.dispatch_guard import DispatchGuard
-from core.listen import VoskListener
+from core.stt_listener import SpeechListener
 from core.metrics import MetricsCollector
 from core.performance import CURRENT_TURN, DISABLED_PERFORMANCE, PerformanceRecorder, TurnTiming
 from core.models import RecognitionResult, TurnEnvelope
@@ -50,7 +50,7 @@ class ValleRaApp:
         self.performance = performance or PerformanceRecorder(self.metrics)
         self.speaker = Speaker(settings)
         self.speaker.performance = self.performance
-        self.listener = None if text_only else VoskListener(settings)
+        self.listener = None if text_only else SpeechListener(settings)
         if self.listener is not None:
             self.listener.performance = self.performance
             self.listener.whisper.performance = self.performance
@@ -140,6 +140,9 @@ class ValleRaApp:
         )
 
     async def _say_confirmation(self, text):
+        processor = getattr(self, 'processor', None)
+        if processor is not None:
+            processor.dialogue_state.proposals.clear()
         # Safety prompts are not obsolete just because conversational output
         # was interrupted while a local operation was preparing confirmation.
         token = SPEECH_SCOPE.set(None)
@@ -177,8 +180,8 @@ class ValleRaApp:
             console_print("Прохання без слова Команда аналізує LLM; дії виконуються після підтвердження."
                           if self.settings.natural_actions_enabled else
                           "Звичайна репліка → розмова; «Команда: <дія>» → локальна дія.")
-            whisper_ok, whisper_detail = self.listener.whisper.status()
-            mode = "Vosk + Whisper" if whisper_ok else "лише Vosk"
+            whisper_ok, whisper_detail = self.listener.status()
+            mode = self.settings.stt_backend
             policy = getattr(self.settings, "stt_refinement_policy", "legacy")
             print(f"[STT] Режим: {mode}; policy={policy} — {whisper_detail}")
         startup_ms = round(
@@ -272,7 +275,8 @@ class ValleRaApp:
         if self.listener is None:
             return
         perf = getattr(self, "performance", DISABLED_PERFORMANCE)
-        await perf.measure("startup.vosk_ready", asyncio.to_thread(self.listener._get_model))
+        if self.settings.stt_backend == 'vosk':
+            await perf.measure("startup.vosk_ready", asyncio.to_thread(self.listener._get_model))
         if self.listener.whisper.enabled and self.settings.stt_whisper_preload:
             with perf.span("startup.whisper_ready") as measurement:
                 ok, _ = await asyncio.to_thread(self.listener.whisper.prepare)
@@ -558,6 +562,7 @@ class ValleRaApp:
                 self.web_ui.publish("notice", "Підтвердження змінилося. Перевірте поточну дію й повторіть відповідь.")
             return
         if CANCEL_WORKPLACE.fullmatch(text):
+            self.processor.interrupt_conversation(discard_proposal=True)
             task = self.services["workplace"]
             cancelled = task.cancel(task.current["id"]) if task.current else False
             notice = "Зупиняю наступні кроки завдання." if cancelled else "Активного завдання немає."
@@ -570,7 +575,10 @@ class ValleRaApp:
             return
         # Only tool-free chat is cancelled. File/app operations keep running;
         # muting their output does not mean cancelling or undoing their effects.
-        self.processor.interrupt_conversation()
+        if PAUSE_CONVERSATION.fullmatch(text) or STOP_SPEECH.fullmatch(text):
+            self.processor.interrupt_conversation(discard_proposal=True)
+        else:
+            self.processor.interrupt_conversation()
         await self.speaker.stop()
         if PAUSE_CONVERSATION.fullmatch(text) and self.services['state'].get('mode', 'chat') == 'chat':
             self.processor.conversation_paused = True
@@ -650,14 +658,14 @@ class ValleRaApp:
             else:
                 self._mic_ready.clear()
         elif action == "stop":
-            self.processor.interrupt_conversation()
+            self.processor.interrupt_conversation(discard_proposal=True)
             await self.speaker.stop()
             self.web_ui.publish("notice", "Відповідь зупинено. Запущені локальні дії не скасовано.")
         elif action in {"pause", "resume"}:
             if self.confirmation.awaiting or self.services["state"].get("mode") != "chat":
                 return 409, {"error": "Спочатку завершіть підтвердження або спеціальний режим."}
             if action == "pause":
-                self.processor.interrupt_conversation()
+                self.processor.interrupt_conversation(discard_proposal=True)
                 self.processor.conversation_paused = True
                 await self.speaker.stop()
             else:

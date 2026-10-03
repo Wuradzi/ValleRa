@@ -1,5 +1,61 @@
 # Архітектура ValleRa
 
+## Phase 3A.2: Ukrainian STT backends (03.10.2026)
+
+Natural speech: `SpeechListener → acoustic PCM capture → STTBackend →
+RecognitionResult → TurnEnvelope`. Default faster-whisper large-v3/uk;
+Vosk remains constrained confirmation and explicit low-resource fallback.
+Backend model/device metadata stays inside audio/diagnostics. Policies and
+typed turn contracts do not depend on the decoder implementation.
+See [configuration, safety and offline benchmark](STT_BACKENDS.md).
+
+## Phase 3A.1: contextual action resolution (02.10.2026)
+
+`DialogueState.proposals` володіє одним `PendingActionProposal` лише в пам'яті
+сесії. Він містить proposal ID, origin turn ID, session ID, tool, immutable
+arguments, reason, created/expires timestamp. TTL — 120 секунд і тільки наступний
+operational turn. Це НЕ ConfirmationService/request і не дозвіл виконати дію.
+
+Модель може повернути `PROPOSAL` з JSON чинного intent schema. Processor перевіряє
+tool/arguments/enabled skills, реєструє пропозицію та сам формує питання з точних
+параметрів. Саме його бачить/чує користувач. Prose з історії не стає permission;
+невизначена тема потребує CLARIFY. PROPOSAL/FOLLOWUP JSON не надходить у TTS/history.
+
+Для наступної репліки manager передає локальний active proposal окремо від
+історії. `FOLLOWUP` повертає proposal_id і accept/reject/modify/ambiguous;
+для modify — повні arguments того самого tool. CHAT та новий ACTION ідуть
+звичайними маршрутами і не залишають попередню пропозицію активною.
+
+- Accept потребує model decision, чинної correlated lease та консервативної
+  перевірки поточної згоди/дієслова щодо запропонованого tool. Окреме «так» не
+  запускає нічого. Негативні/питальні/змішані репліки не стають acceptance.
+- Candidate відновлюється з незмінних збережених arguments, а не з нового JSON.
+  `origin=contextual_followup` відрізняє його від explicit; operational ID поточної
+  репліки не замінюється origin turn ID або proposal ID.
+- ActionPolicy перевіряє відповідність proposal/candidate; state consume — один
+  раз до await executor. Потім звичайні validation/confirmation/verification.
+- Modify нічого не виконує: валідовані нові параметри показуються як нова
+  пропозиція з іншим ID; потрібні наступне прийняття й звичайна safety approval.
+- TTL, session mismatch, новий turn, reject, pause/stop, активне safety confirmation
+  та generation invalidation роблять старі відповіді непридатними. Модель, яка
+  запізнилася після cancellation, не може зареєструвати пропозицію або виконати її.
+- Safety replies спочатку обробляє app/ConfirmationService. TaskContext selections
+  та pending natural clarification мають пріоритет перед assistant proposal.
+  Коли починається safety prompt, proposal state очищується; correlation не змінена.
+
+Пропонуються лише web_search/open_app/find_files/weather/window_control/
+prepare_workplace із чинного каталогу. Довільні shell/delete tools не додаються.
+Мовні guards навмисно консервативні: прийняття поза підтриманими формами або
+неоднозначне «другий» без selection context веде до уточнення. Це не повне
+розуміння довільних посилань на багатотурову історію.
+
+19 нових offline tests: accept/reject/modify, TTL/session/new topic, normal policy,
+deny, scoped/safety priority, duplicate envelope, unreliable STT, late cancellation,
+immutable state, parser/control JSON. Targeted 409/409, full 599/599; Ruff/diff чисті.
+Суміжна корекція: DecisionKind тепер приймає наявний LLM `unavailable`, щоб
+відхилений proposal не породжував enum error. Fallback/provider policy не змінена.
+Новий протокол ще потребує live smoke з реальною моделлю; Phase 3B не розпочато.
+
 ## Phase 3A: core boundaries (30.09.2026)
 
 Це extraction чинних правил, не нова policy. Потік:

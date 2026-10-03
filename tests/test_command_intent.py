@@ -20,6 +20,338 @@ from services.llm.manager import LLMManager
 from services.llm.errors import ResponseError
 
 
+class ContextualProposalTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from core.models import TurnEnvelope
+        self.TurnEnvelope = TurnEnvelope
+        self.manager = object.__new__(LLMManager)
+        self.manager.settings = SimpleNamespace(history_limit=12, llm_total_timeout_seconds=1)
+        self.manager.history = Mock()
+        self.manager.history.load.return_value = {'messages': []}
+        self.manager.system_prompt = 'Fixture'
+        self.manager._append_history = Mock()
+        self.manager.available_order = ['fixture']
+        self.manager.active_name = 'fixture'
+        self.manager._cooldowns = {}
+        self.requests = []
+        self.output = 'CHAT\nВітаю.'
+
+        async def stream(messages):
+            self.requests.append(messages)
+            yield self.output
+        self.manager.providers = {'fixture': SimpleNamespace(chat_stream=stream)}
+        self.apps = SimpleNamespace(open_default_browser=Mock(return_value=True), find=Mock(return_value=[]))
+        self.services = {'state': {'mode': 'chat'}, 'enabled_skills': {'apps', 'web', 'files', 'windows'},
+                         'apps': self.apps, 'memory': SimpleNamespace(relevant=Mock(return_value=[])),
+                         'tasks': TaskContext()}
+        self.speaker = SimpleNamespace(say=AsyncMock(), stop=AsyncMock())
+        self.processor = CommandProcessor(SimpleNamespace(natural_actions_enabled=True),
+            SimpleNamespace(route=AsyncMock(return_value=SkillResult(False))), self.manager,
+            self.speaker, SimpleNamespace(record=Mock()), self.services)
+        self.confirm = AsyncMock(return_value=True)
+        self.sequence = 0
+
+    async def turn(self, text, **flags):
+        self.sequence += 1
+        envelope = self.TurnEnvelope(turn_id=f'fixture:{self.sequence}', session_id='fixture',
+            source='text', text=text, transcript=text, stt_engine='text', confidence=1, **flags)
+        return await self.processor.process(envelope, self.confirm)
+
+    async def offer(self, tool='web_search', arguments=None):
+        self.output = 'PROPOSAL\n' + json.dumps({'tool': tool, 'arguments': arguments or {'query': 'безкоштовні API для STT'}})
+        result = await self.turn('Я обираю інструменти для проєкту')
+        self.assertEqual(result.data['command_type'], 'action_proposal')
+        self.confirm.assert_not_awaited()
+        return self.processor.dialogue_state.proposals.pending
+
+    def reply(self, proposal, resolution='accept', arguments=None):
+        data = {'proposal_id': proposal.proposal_id, 'resolution': resolution}
+        if arguments is not None:
+            data['arguments'] = arguments
+        self.output = 'FOLLOWUP\n' + json.dumps(data)
+
+    async def test_accepts_same_proposed_query_and_keeps_safety_confirmation(self):
+        from core.action_policy import natural_action_permission
+        for utterance in ('так', 'давай', 'підбери', 'шукай'):
+            self.confirm.reset_mock()
+            proposal = await self.offer()
+            self.reply(proposal)
+            search = AsyncMock(return_value=SkillResult(True, 'fixture', {'success': True}))
+            with patch('skills.web.skill.search_web', search), patch(
+                    'core.processor.natural_action_permission', wraps=natural_action_permission) as policy:
+                result = await self.turn(utterance)
+            search.assert_awaited_once_with('безкоштовні API для STT', self.services)
+            self.confirm.assert_awaited_once()
+            self.assertEqual(result.data['intent_route'], 'contextual_followup')
+            self.assertEqual(policy.call_args.args[0].origin, 'contextual_followup')
+            self.assertEqual(policy.call_args.args[0].turn_id, f'fixture:{self.sequence}')
+            self.assertIsNone(self.processor.dialogue_state.proposals.pending)
+            self.assertTrue(any(proposal.proposal_id in message['content'] for message in self.requests[-1]))
+            # No second execution from the same model receipt, even on a new turn.
+            with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+                await self.turn('так')
+                execute.assert_not_awaited()
+
+    async def test_reject_clears_without_confirmation_or_execution(self):
+        proposal = await self.offer()
+        self.reply(proposal, 'reject')
+        with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+            result = await self.turn('ні')
+        self.assertEqual(result.data['command_type'], 'proposal_rejected')
+        self.assertIsNone(self.processor.dialogue_state.proposals.pending)
+        execute.assert_not_awaited()
+        self.confirm.assert_not_awaited()
+
+    async def test_modify_only_reoffers_then_needs_a_new_acceptance(self):
+        proposal = await self.offer(arguments={'query': 'API для STT'})
+        self.reply(proposal, 'modify', {'query': 'тільки безкоштовні API для STT'})
+        with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+            result = await self.turn('тільки безкоштовні')
+        self.assertEqual(result.data['command_type'], 'action_proposal_modified')
+        updated = self.processor.dialogue_state.proposals.pending
+        self.assertNotEqual(updated.proposal_id, proposal.proposal_id)
+        self.assertIn('тільки безкоштовні', result.response)
+        execute.assert_not_awaited()
+        self.confirm.assert_not_awaited()
+        self.reply(updated)
+        with patch('skills.web.skill.search_web', new_callable=AsyncMock,
+                   return_value=SkillResult(True)) as search:
+            await self.turn('так')
+        search.assert_awaited_once_with('тільки безкоштовні API для STT', self.services)
+        self.confirm.assert_awaited_once()
+
+    async def test_no_stale_or_cross_session_proposal_can_execute(self):
+        from dataclasses import replace
+        for invalidation in ('missing', 'expired', 'session', 'cancel', 'unrelated'):
+            self.confirm.reset_mock()
+            proposal = await self.offer()
+            owner = self.processor.dialogue_state.proposals
+            if invalidation == 'missing':
+                owner.clear()
+            elif invalidation == 'expired':
+                owner.pending = replace(proposal, expires_at=0)
+            elif invalidation == 'session':
+                owner.pending = replace(proposal, session_id='other')
+            elif invalidation == 'cancel':
+                self.processor.interrupt_conversation(discard_proposal=True)
+            else:
+                self.output = 'CHAT\nНова тема.'
+                await self.turn('Розкажи про фотосинтез')
+            self.reply(proposal)
+            with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+                await self.turn('так')
+            execute.assert_not_awaited()
+            self.confirm.assert_not_awaited()
+
+    async def test_bare_followup_without_proposal_clarifies_even_if_model_invents_action(self):
+        self.output = 'ACTION\n' + json.dumps({'tool': 'open_app', 'arguments': {'name': 'браузер'}})
+        result = await self.turn('підбери')
+        self.assertEqual(result.data['command_type'], 'intent_clarification')
+        self.assertFalse(self.requests)
+        self.confirm.assert_not_awaited()
+
+    async def test_local_action_acceptance_still_requires_distinct_confirmation(self):
+        proposal = await self.offer('open_app', {'name': 'браузер'})
+        self.reply(proposal)
+        self.confirm.return_value = False
+        result = await self.turn('відкривай')
+        self.confirm.assert_awaited_once()
+        self.assertEqual(result.execution.status.value, 'cancelled')
+        self.apps.open_default_browser.assert_not_called()
+        self.reply(proposal)
+        await self.turn('так')
+        self.apps.open_default_browser.assert_not_called()
+
+    async def test_unreliable_turn_cannot_accept_or_recreate_proposal(self):
+        proposal = await self.offer()
+        self.reply(proposal)
+        with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+            await self.turn('так', recognition_unreliable=True, action_eligible=False)
+        execute.assert_not_awaited()
+        self.confirm.assert_not_awaited()
+        self.assertIsNone(self.processor.dialogue_state.proposals.pending)
+
+    async def test_model_accept_cannot_override_negation_question_or_extra_command(self):
+        for text in ('ні', 'а що ти про них знаєш?', 'так але спочатку видали файл', '"так"'):
+            proposal = await self.offer()
+            self.reply(proposal)
+            with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+                await self.turn(text)
+            execute.assert_not_awaited()
+            self.confirm.assert_not_awaited()
+
+    async def test_scoped_file_selection_has_priority(self):
+        proposal = await self.offer()
+        self.reply(proposal)
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / name for name in ('a.txt', 'b.txt')]
+            for path in paths:
+                path.touch()
+            self.services['tasks'].offer('file', paths, command_type='file_search')
+            with patch.object(self.services['tasks'], 'open_file', new_callable=AsyncMock,
+                              return_value=SkillResult(True)) as open_file:
+                await self.turn('другий')
+            self.assertEqual(open_file.await_args.args[0], paths[1])
+        self.assertEqual(len(self.requests), 1)  # Proposal creation only.
+        self.assertIsNone(self.processor.dialogue_state.proposals.pending)
+
+    async def test_safety_confirmation_consumes_reply_before_proposal(self):
+        from core.app import ValleRaApp
+        await self.offer()
+        app = object.__new__(ValleRaApp)
+        app.processor, app.speaker, app.services, app.web_ui = self.processor, self.speaker, self.services, None
+        app.confirmation = ConfirmationService(app._say_confirmation, timeout_seconds=1)
+        question = asyncio.create_task(app.confirmation.ask('Fixture safety approval'))
+        await app.confirmation.wait_until_requested()
+        await app._submit_text('так', app.confirmation.request_id)
+        self.assertTrue(await question)
+        self.assertEqual(len(self.requests), 1)
+        self.assertIsNone(self.processor.dialogue_state.proposals.pending)
+        self.apps.open_default_browser.assert_not_called()
+
+    async def test_late_resolution_after_interrupt_cannot_execute(self):
+        from core.natural_turn import NaturalTurn
+        from core.action_proposal import ProposalReply, ReplyKind
+        proposal = await self.offer()
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def ignoring_cancel(*args, **kwargs):
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
+            return NaturalTurn('followup', proposal_reply=ProposalReply(proposal.proposal_id, ReplyKind.ACCEPT))
+
+        self.manager.converse = ignoring_cancel
+        with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+            task = asyncio.create_task(self.turn('так'))
+            await entered.wait()
+            self.processor.interrupt_conversation()
+            release.set()
+            await task
+        execute.assert_not_awaited()
+
+    async def test_protocol_never_speaks_control_json_and_does_not_store_it_in_history(self):
+        proposal = await self.offer()
+        self.speaker.say.assert_not_awaited()
+        self.manager._append_history.assert_not_called()
+        self.reply(proposal, 'reject')
+        await self.turn('ні')
+        self.speaker.say.assert_not_awaited()
+        self.manager._append_history.assert_not_called()
+
+    async def test_scoped_clarification_has_priority_over_assistant_proposal(self):
+        import time
+        await self.offer()
+        self.processor._natural_pending = {'tool': 'open_app', 'request': 'відкрий',
+                                          'question': 'Яку програму?', 'expires': time.monotonic() + 60}
+        self.output = 'ACTION\n' + json.dumps({'tool': 'open_app', 'arguments': {'name': 'браузер'}})
+        await self.turn('браузер')
+        self.apps.open_default_browser.assert_called_once()
+        self.confirm.assert_awaited_once()
+        self.assertFalse(any('Локально активна пропозиція' in item['content'] for item in self.requests[-1]))
+        self.assertIsNone(self.processor.dialogue_state.proposals.pending)
+
+    async def test_duplicate_envelope_acceptance_dispatches_once(self):
+        from core.app import ValleRaApp
+        app = object.__new__(ValleRaApp)
+        app.command_queue = asyncio.Queue()
+        app.command_idle = asyncio.Event()
+        app.running, app.web_ui = True, None
+        app.services, app.processor, app.speaker = self.services, self.processor, self.speaker
+        app.confirmation = SimpleNamespace(ask=self.confirm)
+        initial = await app._enqueue_command('розмова', 'text', 1)
+        await app.command_queue.get()
+        app.command_queue.task_done()
+        self.output = 'PROPOSAL\n' + json.dumps({'tool': 'open_app', 'arguments': {'name': 'браузер'}})
+        await self.processor.process(initial, self.confirm)
+        proposal = self.processor.dialogue_state.proposals.pending
+        self.reply(proposal)
+        turn = await app._enqueue_command('так', 'text', 1)
+        await app.command_queue.put(turn)
+        task = asyncio.create_task(app._command_loop())
+        try:
+            await asyncio.wait_for(app.command_queue.join(), 2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.apps.open_default_browser.assert_called_once()
+        self.confirm.assert_awaited_once()
+        self.assertEqual(len(self.requests), 2)
+
+    async def test_timeout_during_resolution_cannot_authorize(self):
+        proposal = await self.offer()
+        self.reply(proposal)
+        owner = self.processor.dialogue_state.proposals
+
+        async def stream(messages):
+            owner.clock = lambda: proposal.expires_at + 1
+            yield self.output
+
+        self.manager.providers['fixture'].chat_stream = stream
+        with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+            await self.turn('так')
+        execute.assert_not_awaited()
+        self.confirm.assert_not_awaited()
+
+    async def test_external_cancel_cannot_register_late_offer(self):
+        from core.natural_turn import NaturalTurn
+        entered = asyncio.Event()
+
+        async def late(*args, **kwargs):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                return NaturalTurn('proposal', intent=CommandIntent('open_app', {'name': 'браузер'}))
+
+        self.manager.converse = late
+        task = asyncio.create_task(self.turn('поради'))
+        await entered.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertIsNone(self.processor.dialogue_state.proposals.pending)
+
+    def test_store_is_immutable_ephemeral_and_rejects_dangerous_or_disabled_tools(self):
+        from core.action_proposal import ProposalState
+        owner = ProposalState()
+        args = {'name': 'браузер'}
+        proposal = owner.offer(CommandIntent('open_app', args), 'turn:1', 'session', {'apps'}, 0)
+        args['name'] = 'інша програма'
+        self.assertEqual(proposal.intent.arguments['name'], 'браузер')
+        self.assertIsNone(ProposalState().pending)
+        for tool, arguments, enabled in (('delete_file', {'path': 'fixture'}, {'files'}),
+                                         ('open_app', {'name': 'браузер'}, set())):
+            fresh = ProposalState()
+            self.assertIsNone(fresh.offer(CommandIntent(tool, arguments), 'turn:1', 'session', enabled, 0))
+            self.assertIsNone(fresh.pending)
+
+    def test_reply_decoder_rejects_swapped_arguments_and_mixed_control(self):
+        from core.natural_turn import TurnDecoder
+        texts = [
+            'FOLLOWUP\n{"proposal_id":"' + 'a' * 32 + '","resolution":"accept","arguments":{"name":"інше"}}',
+            'FOLLOWUP\n{"proposal_id":"' + 'a' * 32 + '","resolution":"accept","resolution":"reject"}',
+            'CHAT\nПривіт\nPROPOSAL\n{"tool":"open_app","arguments":{"name":"браузер"}}',
+        ]
+        for text in texts:
+            decoder = TurnDecoder()
+            with self.assertRaises(InvalidIntent):
+                decoder.feed(text)
+                decoder.finish()
+
+    async def test_invalid_proposal_returns_existing_unavailable_notice_without_state(self):
+        self.output = 'PROPOSAL\n' + json.dumps({'tool': 'delete_file', 'arguments': {'path': 'fixture'}})
+        with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+            result = await self.turn('поради')
+        self.assertIn('Нічого не виконано', result.response)
+        self.assertNotIn('DecisionKind', result.response)
+        self.assertIsNone(self.processor.dialogue_state.proposals.pending)
+        execute.assert_not_awaited()
+        self.confirm.assert_not_awaited()
+
+
 class IntentValidationTests(unittest.TestCase):
     def test_typed_execution_states_do_not_infer_success(self):
         from core.execution_result import ExecutionStatus

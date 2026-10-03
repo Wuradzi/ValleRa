@@ -10,6 +10,7 @@ import re
 import time
 
 from core.models import RecognitionResult
+from core.action_proposal import ProposalState
 from core.natural_turn import (
     direct_request, voice_request, short_clarification, application_name_reply,
 )
@@ -21,6 +22,7 @@ class DialogueState:
 
     def __init__(self, services=None):
         self.pending = None
+        self.proposals = ProposalState()
         self.services = services if services is not None else {}
 
     def scoped_reply(self, text):

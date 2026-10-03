@@ -11,6 +11,9 @@ class DecisionKind(str, Enum):
     ACTION_CANDIDATE = 'action'
     LOCAL_COMMAND = 'local_command'
     CONTROL = 'control'
+    PROPOSAL = 'proposal'
+    FOLLOWUP = 'followup'
+    UNAVAILABLE = 'unavailable'
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +22,8 @@ class DialogueDecision:
     response: str = ''
     intent: CommandIntent | None = None
     turn_id: str | None = None
+    origin: str = 'explicit'
+    proposal_id: str | None = None
 
     @classmethod
     def from_natural(cls, turn, turn_id=None):

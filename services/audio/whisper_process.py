@@ -38,7 +38,11 @@ def _worker(connection, settings):
                 return
             timings = dict(recognizer.last_timings)
             timings[f"whisper.worker_{operation}"] = (time.perf_counter() - operation_started) * 1000
-            connection.send((result, recognizer.status(), recognizer.last_duration_seconds, timings))
+            connection.send((result, recognizer.status(), recognizer.last_duration_seconds, timings,
+                             {'backend': 'faster-whisper', 'model': settings.stt_whisper_model,
+                              'device': getattr(recognizer, 'actual_device', settings.stt_whisper_device),
+                              'compute_type': getattr(recognizer, 'actual_compute_type', settings.stt_whisper_compute_type),
+                              'language': settings.language, 'task': 'transcribe'}))
     except (EOFError, BrokenPipeError, OSError, KeyboardInterrupt):
         pass
     except Exception:
@@ -76,6 +80,7 @@ class ProcessWhisperRecognizer:
         self._retry_after = 0.0
         self.performance = DISABLED_PERFORMANCE
         self.last_timings = {}
+        self.metadata = {}
 
     def status(self):
         return self._status
@@ -120,6 +125,7 @@ class ProcessWhisperRecognizer:
                     payload = connection.recv()
                     result, self._status, self.last_duration_seconds = payload[:3]
                     self.last_timings = payload[3] if len(payload) > 3 else {}
+                    self.metadata = payload[4] if len(payload) > 4 else {}
                     for stage, duration in self.last_timings.items():
                         self.performance.record(stage, duration, status="ok" if self._status[0] else "unavailable")
                     self.performance.record(f"whisper.roundtrip_{operation}", (time.perf_counter() - started) * 1000)
