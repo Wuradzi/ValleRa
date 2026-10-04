@@ -11,7 +11,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Інсталятор ValleRa")
     parser.add_argument(
         "--profile",
-        choices=("desktop", "raspberry_pi"),
+        choices=("desktop", "edge", "raspberry_pi"),
         default="desktop",
     )
     parser.add_argument("--with-extra-llm", action="store_true")
@@ -42,6 +42,8 @@ def main() -> int:
     if args.profile == "desktop":
         _install(root, "requirements-desktop.txt")
         _install(root, "requirements-whisper.txt")
+    else:
+        _install(root, "requirements-edge.txt")
     if args.with_extra_llm:
         _install(root, "requirements-llm-extra.txt")
     if args.with_vision:
@@ -58,9 +60,9 @@ def main() -> int:
 
     print("Далі: python tools/download_vosk_model.py")
     if args.profile == "desktop":
-        print("Для точнішого STT: python tools/download_whisper_model.py")
+        print("Primary STT: python tools/download_whisper_model.py")
     else:
-        print("Запуск на Pi: python main.py --profile raspberry_pi")
+        print('STT: виберіть stt.profile=edge; ONNX файли підготуйте за docs/STT_BACKENDS.md (експериментально).')
     print("Потім: python main.py --setup")
     return 0
 

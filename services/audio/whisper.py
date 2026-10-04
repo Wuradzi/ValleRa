@@ -156,11 +156,8 @@ class WhisperRecognizer:
             with self._measure("whisper.load_weights"):
                 device = 'cpu' if self._forced_cpu else self.settings.stt_whisper_device
                 if device == 'auto':
-                    from ctranslate2 import get_cuda_device_count
-                    try:
-                        device = 'cuda' if get_cuda_device_count() else 'cpu'
-                    except RuntimeError:
-                        device = 'cpu'
+                    from services.audio.capabilities import cuda_available
+                    device = 'cuda' if cuda_available() else 'cpu'
                     if device == 'cpu':
                         logger.info('stt.fallback reason=cuda_unavailable target=cpu')
                 compute = self.settings.stt_whisper_compute_type

@@ -7,8 +7,13 @@
   "confirmation_timeout_seconds": 15,
   "fuzzy_threshold": 85,
   "stt": {
-    "backend": "faster-whisper",
-    "quality_profile": "quality",
+    "backend": "auto",
+    "profile": "auto",
+    "profiles": {
+      "quality": {"backend": "faster-whisper", "model": "large-v3", "device": "auto", "compute_type": "auto", "target_ram_mb": 8192, "target_rtf": 1.0},
+      "balanced": {"backend": "faster-whisper", "model": "small", "device": "cpu", "compute_type": "int8", "target_ram_mb": 3072, "target_rtf": 1.0},
+      "edge": {"backend": "sherpa-onnx", "model": "sherpa-onnx-whisper-small", "device": "cpu", "compute_type": "int8", "target_ram_mb": 2048, "target_rtf": 1.0}
+    },
     "low_resource_model": "base",
     "primary_device": "auto",
     "primary_local_files_only": true,

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from services.audio.profiles import default_profiles
 
 
 class ConfigError(ValueError):
@@ -48,8 +49,10 @@ class Settings:
     confirmation_timeout_seconds: int = 15
     fuzzy_threshold: int = 85
     stt_model_path: str = "models/vosk-model-small-uk-v3-small"
-    stt_backend: str = "faster-whisper"
-    stt_quality_profile: str = "quality"
+    stt_backend: str = "auto"
+    stt_profile: str = "auto"
+    stt_profiles: dict = field(default_factory=dict)
+    stt_quality_profile: str | None = None  # Legacy input, not new configuration.
     stt_low_resource_model: str = "base"
     stt_primary_device: str = "auto"
     stt_primary_local_files_only: bool = True
@@ -131,8 +134,10 @@ def default_config() -> dict[str, Any]:
         "confirmation_timeout_seconds": 15,
         "fuzzy_threshold": 85,
         "stt": {
-            "backend": "faster-whisper",
-            "quality_profile": "quality",
+            "backend": "auto",
+            "profile": "auto",
+            "profiles": default_profiles(),
+            "quality_profile": None,
             "low_resource_model": "base",
             "primary_device": "auto",
             "primary_local_files_only": True,
@@ -233,7 +238,13 @@ def _deep_merge(base: dict[str, Any], custom: dict[str, Any]) -> dict[str, Any]:
 
 
 def merge_config(custom: dict[str, Any]) -> dict[str, Any]:
-    return _deep_merge(default_config(), custom)
+    result = _deep_merge(default_config(), custom)
+    old = custom.get('stt', {})
+    if 'profile' in old:
+        result['stt']['quality_profile'] = None
+    elif old.get('quality_profile') == 'balanced' and 'profiles' not in old:
+        result['stt']['profiles']['balanced']['model'] = 'large-v3-turbo'
+    return result
 
 
 def apply_performance_profile(
@@ -245,10 +256,8 @@ def apply_performance_profile(
     if profile == "fast":
         config["stt"]["whisper"]["beam_size"] = 1
     elif profile == "raspberry_pi":
-        config['stt']['backend'] = 'vosk'
-        config['stt']['quality_profile'] = 'low_resource'
-        # Keep the low-memory profile Vosk-only; switching the desktop default
-        # to base is not evidence that a second model fits the Pi 3B budget.
+        config['stt']['profile'] = 'edge'  # Legacy CLI alias, not a platform/backend.
+        config['stt']['quality_profile'] = None
         config["stt"]["whisper"]["enabled"] = False
         config["stt"]["whisper"]["preload"] = False
         config["stt"]["whisper"]["beam_size"] = 1
@@ -271,10 +280,31 @@ def apply_performance_profile(
 def validate_config(config: dict[str, Any]) -> None:
     try:
         stt = config['stt']
-        if stt['backend'] not in {'faster-whisper', 'vosk'}:
-            raise ConfigError('stt.backend: faster-whisper або vosk')
-        if stt['quality_profile'] not in {'quality', 'balanced', 'low_resource'}:
-            raise ConfigError('stt.quality_profile: quality, balanced або low_resource')
+        if stt['backend'] not in {'auto', 'faster-whisper', 'sherpa-onnx', 'vosk'}:
+            raise ConfigError('Invalid stt.backend')
+        if stt['profile'] not in {'auto', 'quality', 'balanced', 'edge', 'low_resource'}:
+            raise ConfigError('Invalid stt.profile')
+        if stt.get('quality_profile') not in {None, 'quality', 'balanced', 'edge', 'low_resource'}:
+            raise ConfigError('Invalid legacy stt.quality_profile')
+        profiles = stt['profiles']
+        if not isinstance(profiles, dict) or set(profiles) != {'quality', 'balanced', 'edge'}:
+            raise ConfigError('stt.profiles requires quality, balanced, edge')
+        for name, item in profiles.items():
+            if not isinstance(item, dict) or set(item) - {'backend', 'model', 'device', 'compute_type',
+                    'target_ram_mb', 'target_rtf', 'hotwords', 'initial_prompt'}:
+                raise ConfigError('Invalid STT profile fields')
+            if item['backend'] not in {'faster-whisper', 'sherpa-onnx', 'vosk'}:
+                raise ConfigError('Invalid profile backend')
+            if not isinstance(item['model'], str) or not item['model'].strip():
+                raise ConfigError('Profile model is required')
+            if item['device'] not in {'auto', 'cpu', 'cuda'} or (name != 'quality' and item['device'] != 'cpu'):
+                raise ConfigError('balanced/edge must use CPU')
+            if item['compute_type'] not in {'auto', 'int8', 'float32', 'float16', 'int8_float16'}:
+                raise ConfigError('Invalid compute type')
+            if type(item['target_ram_mb']) is not int or item['target_ram_mb'] <= 0:
+                raise ConfigError('Invalid RAM target')
+            if type(item['target_rtf']) not in {int, float} or not 0 < item['target_rtf'] <= 100:
+                raise ConfigError('Invalid RTF target')
         if stt['primary_device'] not in {'auto', 'cpu', 'cuda'}:
             raise ConfigError('stt.primary_device: auto, cpu або cuda')
         if stt['fallback_backend'] not in {'none', 'vosk'}:
@@ -402,6 +432,8 @@ def load_settings(profile_override: str | None = None) -> Settings:
         fuzzy_threshold=int(config["fuzzy_threshold"]),
         stt_model_path=config["stt"]["model_path"],
         stt_backend=config['stt']['backend'],
+        stt_profile=config['stt']['profile'],
+        stt_profiles=config['stt']['profiles'],
         stt_quality_profile=config['stt']['quality_profile'],
         stt_low_resource_model=config['stt']['low_resource_model'],
         stt_primary_device=config['stt']['primary_device'],

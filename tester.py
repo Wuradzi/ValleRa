@@ -53,7 +53,7 @@ GROUPS = {
 }
 
 PROBES = {
-    "stt_benchmark": ("Offline WAV benchmark: Vosk/faster-whisper; без LLM/мережі/мікрофона", "run"),
+    "stt_benchmark": ("Offline WAV backend/profile benchmark; без LLM/мережі/мікрофона", "run"),
     "workplace": ("Читання профілю, індексу й вікон Windows; без запуску програм/мережі/мікрофона", "run"),
     "tts": ("Живий Windows TTS: PCM, зупинка, повторний запуск; без API/мікрофона", "run"),
     "gemini": ("Перевірка Gemini; --web-summary для вебпідсумку; витрачає API-квоту", "main"),
@@ -75,9 +75,11 @@ def probe_options(name, argv):
                                      description=PROBES[name][0])
     if name == 'stt_benchmark':
         parser.add_argument('--corpus', type=Path, required=True)
+        parser.add_argument('--matrix', type=Path)
+        parser.add_argument('--candidates', nargs='+')
         parser.add_argument('--models', nargs='+', default=['vosk', 'large-v3', 'large-v3-turbo'],
-                            choices=['vosk', 'tiny', 'base', 'small', 'large-v3', 'large-v3-turbo'])
-        parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
+                            choices=['vosk', 'tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo'])
+        parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'])
         parser.add_argument('--variant-timeout', type=int, default=600)
     elif name == "gemini":
         parser.add_argument("--connection-comparison", action="store_true",
@@ -164,7 +166,7 @@ def probe_options(name, argv):
     if name == "endpoint" and args.silences[0] != 0:
         parser.error("Перший варіант паузи має бути 0 — штатний Vosk.")
     # Parent and worker may have different working directories.
-    for field in ("corpus", "path", "verify_report", "resume"):
+    for field in ("corpus", "path", "verify_report", "resume", "matrix"):
         value = getattr(args, field, None)
         if value is not None:
             setattr(args, field, value.resolve())

@@ -1,0 +1,11 @@
+{
+  "candidates": [
+    {"id": "vosk", "profile": "balanced", "backend": "vosk", "model": "configured-vosk", "device": "cpu", "compute_type": "float32"},
+    {"id": "base", "profile": "balanced", "backend": "faster-whisper", "model": "base", "device": "cpu", "compute_type": "int8"},
+    {"id": "small-cpu", "profile": "balanced", "backend": "faster-whisper", "model": "small", "device": "cpu", "compute_type": "int8"},
+    {"id": "medium-cpu", "profile": "balanced", "backend": "faster-whisper", "model": "medium", "device": "cpu", "compute_type": "int8"},
+    {"id": "turbo-cpu", "profile": "balanced", "backend": "faster-whisper", "model": "large-v3-turbo", "device": "cpu", "compute_type": "int8"},
+    {"id": "large-quality", "profile": "quality", "backend": "faster-whisper", "model": "large-v3", "device": "auto", "compute_type": "auto"},
+    {"id": "edge-small-onnx", "profile": "edge", "backend": "sherpa-onnx", "model": "sherpa-onnx-whisper-small", "device": "cpu", "compute_type": "int8"}
+  ]
+}

@@ -36,7 +36,7 @@ class AudioBackendTests(unittest.TestCase):
             selected = primary_settings(self.settings)
             self.assertEqual(selected.stt_whisper_model, model)
             self.assertEqual(selected.language, 'uk')
-            self.assertEqual(selected.stt_whisper_device, 'auto')
+            self.assertIn(selected.stt_whisper_device, {'cpu', 'cuda'})
             self.assertTrue(selected.stt_whisper_local_files_only)
 
     def test_primary_does_not_invoke_vosk(self):
@@ -151,6 +151,8 @@ class AudioBackendTests(unittest.TestCase):
         self.assertEqual(kwargs['initial_prompt'], 'Українська мова.')
 
     def test_cuda_load_failure_uses_same_model_cpu(self):
+        self.settings.stt_profile = 'quality'
+        self.settings.stt_primary_device = 'cuda'
         recognizer = WhisperRecognizer(primary_settings(self.settings))
         with patch('ctranslate2.get_cuda_device_count', return_value=1), \
              patch('services.audio.whisper.resolve_model', return_value='cached-model'), \

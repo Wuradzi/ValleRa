@@ -7,6 +7,7 @@ import logging
 import time
 from types import SimpleNamespace
 from typing import Protocol
+from services.audio.profiles import resolve_profile
 
 from core.models import RecognitionResult
 
@@ -20,6 +21,7 @@ class BackendMetadata:
     language: str = 'uk'
     device: str = 'cpu'
     task: str = 'transcribe'
+    compute_type: str = 'unknown'
 
 
 class STTBackend(Protocol):
@@ -30,16 +32,16 @@ class STTBackend(Protocol):
     def close(self) -> None: ...
 
 
-def primary_settings(settings):
+def primary_settings(settings, profile=None):
     """Profile selection is independent of old Vosk-refinement tuning."""
     values = {name: getattr(settings, name) for name in dir(settings)
               if name.startswith('stt_whisper_')}
-    profile = settings.stt_quality_profile
-    values.update(stt_whisper_model={'quality': 'large-v3', 'balanced': 'large-v3-turbo',
-                                   'low_resource': settings.stt_low_resource_model}[profile],
-                  stt_whisper_enabled=True, stt_whisper_device=settings.stt_primary_device,
-                  stt_whisper_compute_type='auto',
-                  stt_whisper_local_files_only=settings.stt_primary_local_files_only)
+    profile = profile or resolve_profile(settings)[0]
+    values.update(stt_whisper_model=profile.model,
+                  stt_whisper_enabled=True, stt_whisper_device=profile.device,
+                  stt_whisper_compute_type=profile.compute_type,
+                  stt_whisper_prompt=profile.initial_prompt, stt_whisper_hotwords=profile.hotwords,
+                  stt_whisper_local_files_only=True)
     return SimpleNamespace(**values, paths=settings.paths, language='uk',
                            stt_selective_whisper_enabled=True)
 
@@ -49,11 +51,14 @@ class FasterWhisperBackend:
         from services.audio.whisper import WhisperRecognizer
         from services.audio.whisper_process import ProcessWhisperRecognizer
         self.metadata = BackendMetadata('faster-whisper', settings.stt_whisper_model,
-                                        device=settings.stt_whisper_device)
+                                        device=settings.stt_whisper_device, compute_type=settings.stt_whisper_compute_type)
         self.recognizer = ProcessWhisperRecognizer(settings) if process else WhisperRecognizer(settings)
 
     def prepare(self):
-        return self.recognizer.prepare()
+        ok, detail = self.recognizer.prepare()
+        if not ok:
+            detail = f'backend=faster-whisper model={self.metadata.model}: {detail}; run python tools/download_whisper_model.py'
+        return ok, detail
 
     def transcribe(self, pcm, sample_rate):
         return self.recognizer.transcribe(pcm, sample_rate)
@@ -104,3 +109,17 @@ class VoskBackend:
 
     def close(self):
         self._model = None
+
+
+def create_backend(settings, profile, *, process=True, allow_download=False):
+    if profile.backend == 'faster-whisper':
+        selected = primary_settings(settings, profile)
+        selected.stt_whisper_local_files_only = not allow_download
+        return FasterWhisperBackend(selected, process=process)
+    if profile.backend == 'sherpa-onnx':
+        from services.audio.sherpa_backend import SherpaOnnxBackend
+        return SherpaOnnxBackend(settings, profile)
+    if profile.backend == 'vosk':
+        source = settings.stt_model_path if profile.model == 'configured-vosk' else profile.model
+        return VoskBackend(settings.paths.project_root / source)
+    raise ValueError('Unsupported STT backend')

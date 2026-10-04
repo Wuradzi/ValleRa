@@ -275,11 +275,9 @@ class ValleRaApp:
         if self.listener is None:
             return
         perf = getattr(self, "performance", DISABLED_PERFORMANCE)
-        if self.settings.stt_backend == 'vosk':
-            await perf.measure("startup.vosk_ready", asyncio.to_thread(self.listener._get_model))
-        if self.listener.whisper.enabled and self.settings.stt_whisper_preload:
-            with perf.span("startup.whisper_ready") as measurement:
-                ok, _ = await asyncio.to_thread(self.listener.whisper.prepare)
+        if self.settings.stt_whisper_preload:
+            with perf.span("startup.stt_ready") as measurement:
+                ok, _ = await asyncio.to_thread(self.listener.prepare)
                 if not ok:
                     measurement.status = "unavailable"
 

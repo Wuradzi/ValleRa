@@ -3,8 +3,12 @@
 ## Phase 3A.2: Ukrainian STT backends (03.10.2026)
 
 Natural speech: `SpeechListener → acoustic PCM capture → STTBackend →
-RecognitionResult → TurnEnvelope`. Default faster-whisper large-v3/uk;
-Vosk remains constrained confirmation and explicit low-resource fallback.
+RecognitionResult → TurnEnvelope`. Capabilities detected only in audio/capabilities;
+profiles.py resolves configurable quality/balanced/edge (legacy aliases supported).
+Default auto is conservative: CPU x86 balanced; ARM edge; known high-resource CUDA quality.
+Faster-whisper remains the desktop decoder; experimental SherpaOnnxBackend is
+CPU-only with uncalibrated confidence (unreliable, not ACTION eligible).
+Vosk remains constrained confirmation and explicitly configured legacy/fallback.
 Backend model/device metadata stays inside audio/diagnostics. Policies and
 typed turn contracts do not depend on the decoder implementation.
 See [configuration, safety and offline benchmark](STT_BACKENDS.md).

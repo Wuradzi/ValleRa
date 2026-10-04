@@ -5,7 +5,8 @@ import math
 from core.listen import VoskListener
 from core.models import RecognitionResult
 from core.performance import TurnTiming
-from services.audio.backends import FasterWhisperBackend, VoskBackend, primary_settings
+from services.audio.backends import VoskBackend, create_backend
+from services.audio.profiles import resolve_profile
 from services.audio.endpoint import QuietEndpoint
 from services.audio.pcm_capture import capture_pcm
 
@@ -16,24 +17,36 @@ class SpeechListener(VoskListener):
     def __init__(self, settings):
         super().__init__(settings)
         self.vosk_backend = VoskBackend(self.model_path)
+        self.profile, self.capabilities = resolve_profile(settings)
+        logger.info('STT profile=%s backend=%s model=%s device=%s compute=%s arch=%s platform=%s',
+                    self.profile.name, self.profile.backend, self.profile.model, self.profile.device,
+                    self.profile.compute_type, self.capabilities.architecture, self.capabilities.platform)
         self.primary = None
-        if settings.stt_backend == 'faster-whisper':
-            self.primary = FasterWhisperBackend(primary_settings(settings))
-            self.whisper = self.primary.recognizer  # Existing lifecycle/performance owner.
+        if self.profile.backend != 'vosk':
+            self.primary = create_backend(settings, self.profile)
+            if self.profile.backend == 'faster-whisper':
+                self.whisper = self.primary.recognizer  # Existing lifecycle/performance owner.
+            else:
+                self.whisper.enabled = False  # Constrained Vosk never uses refinement.
         else:
             self.whisper.enabled = False  # Explicit Vosk-only low-resource backend.
+            self.vosk_backend = create_backend(settings, self.profile)
 
     def _get_model(self):
         return self.vosk_backend.get_model()
 
     def prepare(self):
-        return self.primary.prepare() if self.primary is not None else self.vosk_backend.prepare()
+        ok, detail = self.primary.prepare() if self.primary is not None else self.vosk_backend.prepare()
+        if not ok:
+            logger.warning('STT prepare profile=%s: %s', self.profile.name, detail)
+        return ok, detail
 
     def status(self):
         if self.primary is None:
             return True, 'Vosk (explicit low-resource backend)'
-        ok, detail = self.whisper.status()
-        return ok, f'faster-whisper/{self.primary.metadata.model}; {detail}'
+        ok, detail = (self.whisper.status() if self.profile.backend == 'faster-whisper'
+                      else (False, 'experimental ONNX candidate; prepare explicitly, confidence unvalidated'))
+        return ok, f'{self.profile.name}/{self.primary.metadata.backend}/{self.primary.metadata.model}; {detail}'
 
     def _cancelled(self):
         return self._closed.is_set() or self._paused.is_set() or self._interrupt.is_set()
@@ -73,7 +86,7 @@ class SpeechListener(VoskListener):
                 self._cancelled)
         if self._cancelled() or outcome == 'cancelled':
             return RecognitionResult('', 0, 'interrupted')
-        failed = (outcome != 'done' or not result.text.strip() or not math.isfinite(result.confidence)
+        failed = (outcome != 'done' or result.recognition_unreliable or not result.text.strip() or not math.isfinite(result.confidence)
                   or result.confidence < self.settings.stt_whisper_min_confidence)
         if failed:
             reason = outcome if outcome != 'done' else 'empty_or_unreliable'
@@ -96,11 +109,14 @@ class SpeechListener(VoskListener):
         if timing is not None:
             timing.mark('recognition_ready')
         logger.info('stt.backend=%s model=%s language=uk task=transcribe latency_ms=%.1f '
-                    'stt_final_engine=%s recognition_unreliable=%s capture_truncated=%s',
+                    'stt_final_engine=%s recognition_unreliable=%s capture_truncated=%s rtf=%.3f',
                     self.primary.metadata.backend, self.primary.metadata.model, elapsed,
-                    result.engine, failed, capture.truncated)
+                    result.engine, failed, capture.truncated,
+                    elapsed / 1000 / max(.001, len(capture.pcm) / 2 / capture.sample_rate))
         return result
 
     def close(self):
         super().close()
+        if self.primary is not None and self.profile.backend != 'faster-whisper':
+            self.primary.close()
         self.vosk_backend.close()
