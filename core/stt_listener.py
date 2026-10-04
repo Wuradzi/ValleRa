@@ -1,6 +1,7 @@
 """Primary whole-utterance STT; legacy constrained Vosk capture is untouched."""
 import logging
 import math
+import time
 
 from core.listen import VoskListener
 from core.models import RecognitionResult
@@ -78,6 +79,9 @@ class SpeechListener(VoskListener):
         raise RuntimeError('STT microphone unavailable: ' + ', '.join(errors))
 
     def _recognize_capture(self, capture, timing=None):
+        if not capture.pcm:
+            return RecognitionResult('', 0, 'whisper')
+        stt_started = time.perf_counter()
         # Existing single-job drain keeps timed-out inference isolated. No Vosk
         # transcript is needed to start the primary decoder or finish capture.
         with self.performance.span('stt.primary_transcribe'):
@@ -108,6 +112,26 @@ class SpeechListener(VoskListener):
         result.timing = timing
         if timing is not None:
             timing.mark('recognition_ready')
+        ready = time.perf_counter()
+        metadata = getattr(getattr(self.primary, 'recognizer', None), 'metadata', {})
+        worker_timings = getattr(getattr(self.primary, 'recognizer', None), 'last_timings', {})
+        if outcome != 'done':
+            metadata, worker_timings = {}, {}  # Never attribute a previous job's metadata to this turn.
+        logger.info('stt.latency capture_total_ms=%s speech_end_to_endpoint_ms=%s '
+                    'endpoint_to_stt_start_ms=%.1f stt_inference_ms=%s endpoint_to_transcript_ms=%.1f '
+                    'speech_end_to_transcript_ms=%s model=%s backend=%s device=%s compute_type=%s '
+                    'fallback=%s escalated=%s cold_or_warm=%s outcome=%s',
+                    (capture.capture_returned_at - capture.capture_started_at) * 1000
+                    if capture.capture_started_at is not None and capture.capture_returned_at is not None else None,
+                    (capture.endpoint_at - capture.speech_end_at) * 1000 if capture.speech_end_at is not None else None,
+                    (stt_started - capture.endpoint_at) * 1000,
+                    worker_timings.get('whisper.inference') if outcome == 'done' else None,
+                    (ready - capture.endpoint_at) * 1000,
+                    (ready - capture.speech_end_at) * 1000 if capture.speech_end_at is not None else None,
+                    metadata.get('model', self.primary.metadata.model), self.primary.metadata.backend,
+                    metadata.get('device', self.profile.device), metadata.get('compute_type', self.profile.compute_type),
+                    'model_fallback_or_failure' if failed else metadata.get('fallback', 'none'),
+                    metadata.get('escalated', False), metadata.get('cold_or_warm', 'unknown'), outcome)
         logger.info('stt.backend=%s model=%s language=uk task=transcribe latency_ms=%.1f '
                     'stt_final_engine=%s recognition_unreliable=%s capture_truncated=%s rtf=%.3f',
                     self.primary.metadata.backend, self.primary.metadata.model, elapsed,

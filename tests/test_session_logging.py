@@ -44,7 +44,7 @@ def fixture_whisper_worker(connection, settings):
         print("[STT] fixture Whisper ready")
         return True, "fixture ready"
 
-    recognizer = Mock(last_duration_seconds=0, actual_device='cpu', actual_compute_type='int8',
+    recognizer = Mock(last_duration_seconds=0, last_metadata={}, actual_device='cpu', actual_compute_type='int8',
                       prepare=Mock(side_effect=prepare),
                       status=Mock(return_value=(True, "fixture ready")))
     with patch("services.audio.whisper_process.WhisperRecognizer", return_value=recognizer):

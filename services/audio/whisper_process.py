@@ -42,7 +42,8 @@ def _worker(connection, settings):
                              {'backend': 'faster-whisper', 'model': settings.stt_whisper_model,
                               'device': getattr(recognizer, 'actual_device', settings.stt_whisper_device),
                               'compute_type': getattr(recognizer, 'actual_compute_type', settings.stt_whisper_compute_type),
-                              'language': settings.language, 'task': 'transcribe'}))
+                              'language': settings.language, 'task': 'transcribe',
+                              **recognizer.last_metadata}))
     except (EOFError, BrokenPipeError, OSError, KeyboardInterrupt):
         pass
     except Exception:

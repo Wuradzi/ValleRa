@@ -232,3 +232,134 @@ in this corpus: semantic accuracy is null, not a claimed success. No ARM64/GPU
 hardware validation was performed. Functional suite on 04.10: 637/637; this does
 not validate acoustic quality. Architecture is ready for profile-specific offline
 benchmarking, but production edge confidence and interactive CPU quality remain open.
+
+## Performance pass (04.10.2026): validation candidate, not a GPU speed claim
+
+CUDA failures now retain exception type/message/traceback, model, device,
+compute type and installed faster-whisper/CTranslate2 versions in the debug/session
+log. Only explicit CUDA runtime/driver/cuBLAS/cuDNN failures permit one same-model
+CPU retry. Generic RuntimeError, input/decode, corrupt weights, and API/config errors
+do not. A successful same-model CPU result is not automatically unreliable;
+weaker Vosk fallback still is. No dependency was reinstalled or pinned speculatively.
+The original RTX exception message was unavailable on this CPU-only host: its
+actual cause remains UNIDENTIFIED until the diagnostic is run on that machine.
+
+Current upstream requirements: CUDA 12 cuBLAS and cuDNN 9 for current CTranslate2
+([faster-whisper](https://github.com/SYSTRAN/faster-whisper#gpu),
+[CTranslate2](https://opennmt.net/CTranslate2/installation.html)). Check the exact
+installed version, driver and library search path before changing packages.
+Model load success is not evidence of successful CUDA inference.
+
+### Optional fast-first GPU candidate
+
+In `stt.profiles.quality`, set:
+
+```json
+{"backend":"faster-whisper", "model":"large-v3-turbo", "device":"cuda",
+ "compute_type":"float16", "target_ram_mb":8192, "target_rtf":1.0,
+ "escalation_model":"large-v3", "escalation_confidence":0.8}
+```
+
+Select `stt.profile="quality"`; remove legacy `quality_profile` overrides.
+Both models must already be cached. No automatic download. The new profile
+fields are optional: defaults remain unchanged until comparative GPU data exists.
+This is deliberately NOT a claim that turbo won. Balanced small/CPU and edge
+contracts remain intact. Base/tiny are comparison baselines, not new defaults.
+
+One worker/request: primary returns immediately when nonempty, finite confidence
+>=0.8, reliable and without the existing lexical incomplete hint. Otherwise one
+large-v3 pass is allowed; runtime errors do not trigger it. Still-uncertain quality
+output stays unreliable/incomplete. No intent rewriting, LLM correction or new
+ACTION permission is introduced. Existing confirmation checks remain authoritative.
+This does not detect every semantic/entity mistake in a confident transcript.
+
+Only one model slot is resident. Switching drops the previous model; the next
+turn restores primary lazily, so escalations cost load latency. Dual residency is
+NOT enabled without VRAM evidence. Primary stays warm across ordinary turns.
+The existing bounded drain owns the entire cascade; timeout/cancellation discards
+its late result and prevents parallel jobs. Native inference is not cancellable
+mid-call; a timed-out worker may finish computation but cannot dispatch a turn.
+
+### Capture/endpoint measurements
+
+PCM only uses <=100ms blocks. Under one second of speech span, the configurable
+`pcm_short_silence_ms=700` applies; medium speech retains the configured silence
+or 1200ms; >=3 seconds retains `pcm_long_silence_ms=1600` (at least the base).
+These are cautious acoustic heuristics, not sentence completion detection.
+Vosk confirmation and Fragment Guard are untouched. Short internal pauses can
+still be ambiguous; long utterances do NOT yet achieve the 300–700ms UX target.
+
+Capture logs include capture start/return, estimated speech start/last/end,
+endpoint timestamp/reason, effective threshold, overflow, speech span and active
+audio duration. `stt.latency` separates capture_total_ms, speech_end_to_endpoint_ms,
+endpoint_to_stt_start_ms, stt_inference_ms, endpoint_to_transcript_ms and
+speech_end_to_transcript_ms, plus model/backend/device/compute/fallback/escalated/
+cold_or_warm. Energy timestamps are estimates based on callback arrival, not
+ground-truth word boundaries. Timeout/busy never reuses a previous inference time.
+
+A 15s capture can contain actual speech, initial silence, continuing noise above
+the energy threshold, or a recording deadline. Previous aggregate timing alone
+cannot identify which. `core/app.py` passes a 15s capture deadline, including
+initial silence. Thus silence-only polls and sustained noise can reach 15s;
+it is NOT a 15s inference or mandatory post-speech wait. This deadline is unchanged. Use
+endpoint_reason=capture_limit, speech_span_ms, active_audio_ms and overflow to
+diagnose the next live session. Silence without >=250ms active signal skips ASR;
+continuous environmental noise can still pass this energy gate.
+
+### RTX 4060 verification (PowerShell, repo root)
+
+```powershell
+nvidia-smi
+.venv/Scripts/python.exe -c "from services.audio.cuda_diagnostics import runtime_versions; print(runtime_versions())"
+Get-Command nvidia-smi
+where.exe cublas64_12.dll
+where.exe cudnn64_9.dll
+.venv/Scripts/python.exe tester.py --probe stt_benchmark --allow-live --timeout 2400 -- --corpus logs/voice-corpus/ID --matrix testing/stt_matrix.json --candidates turbo-cuda-fp16 turbo-cuda-int8 large-cuda-fp16 --variant-timeout 600
+.venv/Scripts/python.exe tester.py --probe stt_benchmark --allow-live -- --corpus logs/voice-corpus/ID --endpoint-only
+```
+
+Replace ID with the existing corpus directory on that PC. `where.exe` checks PATH,
+not every possible DLL search location. Do not install DLLs from random sources.
+Missing models/CUDA are NOT_TESTED. CPU fallback in a CUDA variant is FAILED,
+never reported as GPU latency. First inference is a separate warmup, followed by
+measured warm rows; load time is separate. Optional installed pynvml samples total
+device-0 VRAM (including other processes), not exact model allocation. Without it
+VRAM remains null; run `nvidia-smi --query-gpu=memory.used --format=csv -l 1`
+in another terminal. No new dependency is required for CPU tests.
+
+Finally run the normal assistant with performance logging and speak complete,
+paused and short Ukrainian phrases. Inspect the session metrics above; offline
+WAV benchmarks alone cannot validate microphone endpoint latency. The corpus
+has no intent/entity annotations, so those accuracies remain null. No GPU, Pi,
+live microphone or dual-residency performance is certified by automated tests.
+
+### Actual CPU measurements and completion status, 04.10.2026
+
+Same 24 WAV, Windows x86_64 / 3791MiB RAM, CTranslate2 4.8.1,
+faster-whisper 1.2.1; no CUDA. First inference excluded from warm statistics.
+Some early measurements overlapped automated tests / short replay: exploratory
+latencies, not an idle-machine model selection experiment.
+
+| Candidate | WER / CER % | Warm mean / median / p95 ms | RTF | Load / first inference ms | Peak process RSS MiB |
+|---|---|---|---|---|---|
+| tiny CPU int8 | 66.49 / 22.43 | 1347 / 1395 / 1518 | 0.301 | 1769 / 1709 | 268.3 |
+| Vosk baseline | 27.66 / 7.83 | 1973 / 1948 / 2812 | 0.441 | 5551 / 1962 | 770.2 |
+| base CPU int8 | 64.89 / 19.98 | 2466 / 2306 / 3078 | 0.551 | 2530 / 2618 | 335.1 |
+| small CPU int8 | 24.47 / 8.97 | 7659 / 7427 / 8833 | 1.710 | 5482 / 7989 | 727.4 |
+
+Medium, turbo, large-v3 and ONNX: NOT_TESTED (local weights/runtime unavailable).
+All three explicit GPU variants: NOT_TESTED (CUDA unavailable). VRAM not measured.
+Intent/entity preservation is null: the existing corpus lacks annotations.
+Small still misses interactive targets; base/tiny quality is unacceptable as a
+default fix. No GPU winner selected, no default model change justified yet.
+
+Acoustic replay with 100ms blocks: both short-threshold candidates (700/1200ms)
+had 0/24 potential early cuts, mean estimated end-to-endpoint 1465ms. These corpus
+phrases did not exercise the under-1s fast branch; synthetic boundary tests do.
+This is not proof against clipping natural slow speech or environmental noise.
+
+Targeted checks: 374/374; final full suite: 652/652; Ruff and diff check clean.
+An initial full run was 651/652: an old logging-worker mock lacked last_metadata;
+the fixture was updated and logging 18/18 plus the full suite rerun successfully.
+ActionPolicy, TurnEnvelope, confirmation correlation, routing and TTS unchanged.
+Code is ready for RTX/live diagnostics, NOT certified to meet latency targets.

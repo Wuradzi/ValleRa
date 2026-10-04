@@ -156,7 +156,7 @@ class AudioBackendTests(unittest.TestCase):
         recognizer = WhisperRecognizer(primary_settings(self.settings))
         with patch('ctranslate2.get_cuda_device_count', return_value=1), \
              patch('services.audio.whisper.resolve_model', return_value='cached-model'), \
-             patch('faster_whisper.WhisperModel', side_effect=[RuntimeError('cuda'), Mock()]) as constructor:
+             patch('faster_whisper.WhisperModel', side_effect=[RuntimeError('CUDA failed with error out of memory'), Mock()]) as constructor:
             recognizer._get_model()
         self.assertEqual(constructor.call_count, 2)
         self.assertEqual(constructor.call_args.args, ('cached-model',))

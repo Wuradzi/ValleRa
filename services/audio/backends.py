@@ -41,6 +41,8 @@ def primary_settings(settings, profile=None):
                   stt_whisper_enabled=True, stt_whisper_device=profile.device,
                   stt_whisper_compute_type=profile.compute_type,
                   stt_whisper_prompt=profile.initial_prompt, stt_whisper_hotwords=profile.hotwords,
+                  stt_whisper_escalation_model=profile.escalation_model,
+                  stt_whisper_escalation_confidence=profile.escalation_confidence,
                   stt_whisper_local_files_only=True)
     return SimpleNamespace(**values, paths=settings.paths, language='uk',
                            stt_selective_whisper_enabled=True)

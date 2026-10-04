@@ -1,5 +1,9 @@
 {
   "candidates": [
+    {"id": "tiny", "profile": "balanced", "backend": "faster-whisper", "model": "tiny", "device": "cpu", "compute_type": "int8"},
+    {"id": "turbo-cuda-fp16", "profile": "quality", "backend": "faster-whisper", "model": "large-v3-turbo", "device": "cuda", "compute_type": "float16"},
+    {"id": "turbo-cuda-int8", "profile": "quality", "backend": "faster-whisper", "model": "large-v3-turbo", "device": "cuda", "compute_type": "int8_float16"},
+    {"id": "large-cuda-fp16", "profile": "quality", "backend": "faster-whisper", "model": "large-v3", "device": "cuda", "compute_type": "float16"},
     {"id": "vosk", "profile": "balanced", "backend": "vosk", "model": "configured-vosk", "device": "cpu", "compute_type": "float32"},
     {"id": "base", "profile": "balanced", "backend": "faster-whisper", "model": "base", "device": "cpu", "compute_type": "int8"},
     {"id": "small-cpu", "profile": "balanced", "backend": "faster-whisper", "model": "small", "device": "cpu", "compute_type": "int8"},

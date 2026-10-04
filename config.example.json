@@ -19,6 +19,8 @@
     "primary_local_files_only": true,
     "fallback_backend": "none",
     "primary_timeout_ms": 60000,
+    "pcm_short_silence_ms": 700,
+    "pcm_long_silence_ms": 1600,
     "model_path": "models/vosk-model-small-uk-v3-small",
     "sample_rate": 16000,
     "audio_block_ms": 250,

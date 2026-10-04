@@ -81,6 +81,7 @@ def probe_options(name, argv):
                             choices=['vosk', 'tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo'])
         parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'])
         parser.add_argument('--variant-timeout', type=int, default=600)
+        parser.add_argument('--endpoint-only', action='store_true', help='Offline PCM endpoint replay; no ASR models')
     elif name == "gemini":
         parser.add_argument("--connection-comparison", action="store_true",
                             help="6 нейтральних API-запитів: новий клієнт проти keep-alive, без історії")

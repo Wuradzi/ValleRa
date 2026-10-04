@@ -100,14 +100,32 @@ def _variant(connection, directory, candidate, device):
                  'rss_note': 'sampled whole isolated process RSS every 50ms, including model load'}
 
     def sample_ram():
+        nvml = None
         try:
             import psutil
             process = psutil.Process(os.getpid())
+            try:
+                import pynvml
+                pynvml.nvmlInit()
+                nvml = pynvml
+                gpu = nvml.nvmlDeviceGetHandleByIndex(0)
+                resources['vram_note'] = 'sampled total device 0 usage (includes other processes), every 50ms'
+            except Exception:
+                nvml = None
             while not stop.is_set():
                 resources['peak_rss_mb'] = max(resources['peak_rss_mb'] or 0, process.memory_info().rss / 1048576)
+                if nvml is not None:
+                    try:
+                        used = nvml.nvmlDeviceGetMemoryInfo(gpu).used / 1048576
+                        resources['peak_vram_mb'] = max(resources['peak_vram_mb'] or 0, used)
+                    except Exception:
+                        pass
                 stop.wait(.05)
         except (ImportError, OSError):
             pass
+        finally:
+            if nvml is not None:
+                nvml.nvmlShutdown()
 
     monitor = threading.Thread(target=sample_ram, daemon=True)
     monitor.start()
@@ -127,6 +145,11 @@ def _variant(connection, directory, candidate, device):
         settings.stt_whisper_prompt = settings.stt_whisper_hotwords = ''
         profile, capabilities = resolve_profile(settings)
         report.update(profile=asdict(profile), hardware=asdict(capabilities))
+        from services.audio.cuda_diagnostics import runtime_versions
+        report['versions'] = runtime_versions()
+        if profile.device == 'cuda' and not capabilities.cuda:
+            report.update(status='NOT_TESTED', reason='cuda_unavailable')
+            return
         samples, digest, synthetic = read_samples(directory)
         report.update(corpus_sha256=digest, synthetic=synthetic)
         backend = create_backend(settings, profile, process=False)
@@ -134,21 +157,42 @@ def _variant(connection, directory, candidate, device):
         ok, detail = backend.prepare()
         report.update(load_ms=(time.perf_counter() - started) * 1000, metadata=asdict(backend.metadata))
         if not ok:
-            report.update(status='NOT_TESTED', reason='model_or_runtime_unavailable', preparation_detail=detail)
+            unavailable = (backend.recognizer.preparation_unavailable if profile.backend == 'faster-whisper'
+                           else any(token in detail for token in ('missing', 'FileNotFoundError', 'ModuleNotFoundError')))
+            report.update(status='NOT_TESTED' if unavailable else 'failed',
+                          reason='model_or_runtime_unavailable' if unavailable else 'preparation_failed', preparation_detail=detail)
         else:
             if profile.backend == 'faster-whisper':
                 report['metadata']['device'] = backend.recognizer.actual_device
                 report['metadata']['compute_type'] = backend.recognizer.actual_compute_type
+                if profile.device == 'cuda' and backend.recognizer.actual_device != 'cuda':
+                    raise RuntimeError('CUDA load fell back to CPU; not a GPU benchmark')
+            # A real first inference, excluded from the warm distribution, catches
+            # CUDA errors that weight loading alone cannot reveal.
+            _, pcm, rate, _ = samples[0]
+            started = time.perf_counter()
+            backend.transcribe(pcm, rate)
+            report['first_inference_ms'] = (time.perf_counter() - started) * 1000
+            if profile.backend == 'faster-whisper':
+                if backend.recognizer.last_error:
+                    raise RuntimeError('warmup failed: ' + backend.recognizer.last_error)
+                if profile.device == 'cuda' and backend.recognizer.actual_device != 'cuda':
+                    raise RuntimeError('CUDA candidate fell back to CPU; not a GPU benchmark')
             for row, pcm, rate, duration in samples:
                 started = time.perf_counter()
                 result = backend.transcribe(pcm, rate)
+                if profile.backend == 'faster-whisper':
+                    if backend.recognizer.last_error:
+                        raise RuntimeError(backend.recognizer.last_error)
+                    if profile.device == 'cuda' and backend.recognizer.actual_device != 'cuda':
+                        raise RuntimeError('CUDA candidate fell back to CPU; not a GPU benchmark')
                 report['rows'].append({'id': row['id'], 'reference': row['reference'], 'transcript': result.text,
                     'engine': result.engine, 'audio_seconds': duration, 'latency_ms': (time.perf_counter() - started) * 1000,
                     **scores(row['reference'], result.text), **semantic_scores(row.get('semantic'), result.text)})
             report.update(status='completed', summary=aggregate(report['rows']),
                           empty_transcripts=sum(not r['transcript'].strip() for r in report['rows']))
     except Exception as exc:
-        report.update(status='failed', reason=type(exc).__name__)
+        report.update(status='failed', reason=type(exc).__name__, error=str(exc))
     finally:
         stop.set()
         monitor.join(1)
@@ -193,6 +237,9 @@ def read_matrix(args):
 
 
 def run(args):
+    if getattr(args, 'endpoint_only', False):
+        from testing.probes.pcm_endpoint import run as replay
+        return replay(args)
     read_samples(args.corpus)  # Validate once before starting any model.
     candidates = read_matrix(args)
     root = Path(__file__).resolve().parents[2]

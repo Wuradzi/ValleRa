@@ -27,6 +27,8 @@ class STTProfile:
     hotwords: str = ''
     initial_prompt: str = ''
     language: str = 'uk'
+    escalation_model: str = ''
+    escalation_confidence: float = .8
 
 
 def resolve_profile(settings, capabilities=None):
@@ -64,4 +66,6 @@ def resolve_profile(settings, capabilities=None):
         raise ValueError('sherpa-onnx adapter supports CPU only')
     return STTProfile(name, values['backend'], values['model'], device, compute,
         values['target_ram_mb'], values['target_rtf'], values.get('hotwords', settings.stt_whisper_hotwords),
-        values.get('initial_prompt', settings.stt_whisper_prompt)), caps
+        values.get('initial_prompt', settings.stt_whisper_prompt),
+        escalation_model=values.get('escalation_model', ''),
+        escalation_confidence=values.get('escalation_confidence', .8)), caps

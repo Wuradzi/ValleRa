@@ -58,6 +58,8 @@ class Settings:
     stt_primary_local_files_only: bool = True
     stt_fallback_backend: str = "none"
     stt_primary_timeout_ms: int = 60000
+    stt_pcm_short_silence_ms: int = 700
+    stt_pcm_long_silence_ms: int = 1600
     stt_sample_rate: int = 16000
     stt_audio_block_ms: int = 250
     stt_endpoint_silence_ms: int = 0
@@ -143,6 +145,8 @@ def default_config() -> dict[str, Any]:
             "primary_local_files_only": True,
             "fallback_backend": "none",
             "primary_timeout_ms": 60000,
+            "pcm_short_silence_ms": 700,
+            "pcm_long_silence_ms": 1600,
             "model_path": "models/vosk-model-small-uk-v3-small",
             "sample_rate": 16000,
             "audio_block_ms": 250,
@@ -291,7 +295,8 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ConfigError('stt.profiles requires quality, balanced, edge')
         for name, item in profiles.items():
             if not isinstance(item, dict) or set(item) - {'backend', 'model', 'device', 'compute_type',
-                    'target_ram_mb', 'target_rtf', 'hotwords', 'initial_prompt'}:
+                    'target_ram_mb', 'target_rtf', 'hotwords', 'initial_prompt',
+                    'escalation_model', 'escalation_confidence'}:
                 raise ConfigError('Invalid STT profile fields')
             if item['backend'] not in {'faster-whisper', 'sherpa-onnx', 'vosk'}:
                 raise ConfigError('Invalid profile backend')
@@ -305,6 +310,15 @@ def validate_config(config: dict[str, Any]) -> None:
                 raise ConfigError('Invalid RAM target')
             if type(item['target_rtf']) not in {int, float} or not 0 < item['target_rtf'] <= 100:
                 raise ConfigError('Invalid RTF target')
+            if item.get('escalation_model', '') not in {'', 'large-v3'}:
+                raise ConfigError('Only optional large-v3 escalation is supported')
+            if item.get('escalation_model') and (item['backend'] != 'faster-whisper' or item['model'] != 'large-v3-turbo'):
+                raise ConfigError('Escalation requires faster-whisper large-v3-turbo primary')
+            if type(item.get('escalation_confidence', .8)) not in {float, int} or not .5 <= item.get('escalation_confidence', .8) <= 1:
+                raise ConfigError('Invalid escalation confidence')
+        if (type(stt['pcm_short_silence_ms']) is not int or type(stt['pcm_long_silence_ms']) is not int
+                or not 500 <= stt['pcm_short_silence_ms'] <= stt['pcm_long_silence_ms'] <= 2500):
+            raise ConfigError('PCM silence must satisfy 500 <= short <= long <= 2500')
         if stt['primary_device'] not in {'auto', 'cpu', 'cuda'}:
             raise ConfigError('stt.primary_device: auto, cpu або cuda')
         if stt['fallback_backend'] not in {'none', 'vosk'}:
@@ -440,6 +454,8 @@ def load_settings(profile_override: str | None = None) -> Settings:
         stt_primary_local_files_only=config['stt']['primary_local_files_only'],
         stt_fallback_backend=config['stt']['fallback_backend'],
         stt_primary_timeout_ms=config['stt']['primary_timeout_ms'],
+        stt_pcm_short_silence_ms=config['stt']['pcm_short_silence_ms'],
+        stt_pcm_long_silence_ms=config['stt']['pcm_long_silence_ms'],
         stt_sample_rate=int(config["stt"]["sample_rate"]),
         stt_audio_block_ms=int(config["stt"]["audio_block_ms"]),
         stt_endpoint_silence_ms=int(config["stt"]["endpoint_silence_ms"]),

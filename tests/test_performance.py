@@ -140,7 +140,7 @@ class BackendTimingTests(unittest.TestCase):
         self.assertEqual(set(recognizer.last_timings), {"whisper.import", "whisper.resolve_files", "whisper.load_weights"})
 
     def test_worker_transmits_timings_without_transcript_in_timing_payload(self):
-        recognizer = Mock(last_duration_seconds=0)
+        recognizer = Mock(last_duration_seconds=0, last_metadata={})
         recognizer.prepare.side_effect = lambda: recognizer.last_timings.update({"whisper.import": 12}) or (True, "ready")
         recognizer.status.return_value = (True, "ready")
         connection = Mock(recv=Mock(side_effect=[("prepare", ()), ("close", ())]))
