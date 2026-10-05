@@ -1,0 +1,8 @@
+{
+  "candidates": [
+    {"id": "small-baseline", "backend": "faster-whisper", "model": "small", "device": "cpu", "compute_type": "int8"},
+    {"id": "small-single-pass", "backend": "faster-whisper", "model": "small", "device": "cpu", "compute_type": "int8", "single_pass": true},
+    {"id": "small-no-timestamps", "backend": "faster-whisper", "model": "small", "device": "cpu", "compute_type": "int8", "word_timestamps": false},
+    {"id": "moonshine-uk", "backend": "moonshine-onnx", "model": "models/sherpa-onnx-moonshine-base-uk-quantized-2026-02-27", "device": "cpu", "compute_type": "int8"}
+  ]
+}

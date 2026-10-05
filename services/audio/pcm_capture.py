@@ -81,19 +81,27 @@ def capture_pcm(sd, device, rate, timeout, settings, cancelled, capture_state):
     captured = bytearray()
     last_at = None
     started = time.monotonic()
+    deadline = started + timeout
+    speech_deadline_set = False
     capture_started = time.perf_counter()
     endpoint_at = None
     truncated = True
     with suppress_native_stderr(), sd.RawInputStream(samplerate=rate,
             blocksize=max(1, int(rate * min(100, settings.stt_audio_block_ms) / 1000)), device=device,
             dtype='int16', channels=1, callback=callback), capture_state():
-        while time.monotonic() - started < timeout and not cancelled():
+        while time.monotonic() < deadline and not cancelled():
             try:
                 data, last_at = blocks.get(timeout=.05)
             except queue.Empty:
                 continue
             captured.extend(data)
             endpoint.feed(data)
+            if endpoint.speech and not speech_deadline_set:
+                # Waiting for speech must not consume the utterance budget.
+                # Backdate to acoustic onset, not the later 250ms speech decision.
+                span = (endpoint.processed - endpoint.first_active) / rate
+                deadline = min(started + 2 * timeout, time.monotonic() + timeout - span)
+                speech_deadline_set = True
             if endpoint.ready and blocks.empty():
                 truncated = False
                 endpoint_at = time.perf_counter()
@@ -104,16 +112,20 @@ def capture_pcm(sd, device, rate, timeout, settings, cancelled, capture_state):
     speech_started = (last_at - (endpoint.processed - endpoint.first_active) / rate
                       if last_at is not None and endpoint.speech else None)
     reason = 'interrupted' if cancelled() else ('silence' if not truncated else 'capture_limit')
+    trim_samples = max(0, (endpoint.first_active or 0) - round(rate * .3))
     logging.getLogger(__name__).info(
         'stt.capture capture_total_ms=%.1f speech_started=%s speech_last_detected=%s '
         'speech_end_estimated=%s endpoint_detected=%.6f capture_returned=%.6f '
         'speech_end_to_endpoint_ms=%s endpoint_reason=%s effective_threshold_ms=%s '
-        'speech_span_ms=%.1f active_audio_ms=%.1f overflow=%s',
+        'speech_span_ms=%.1f active_audio_ms=%.1f overflow=%s '
+        'onset_budget_ms=%.1f utterance_budget_ms=%.1f initial_silence_trimmed_ms=%.1f',
         (end - capture_started) * 1000, speech_started, speech_end, speech_end, endpoint_at or end, end,
         ((endpoint_at or end) - speech_end) * 1000 if speech_end is not None else None,
         reason, endpoint.threshold_ms,
         (speech_end - speech_started) * 1000 if speech_started is not None else 0,
-        endpoint.active / rate * 1000, overflow)
-    return CapturedAudio(bytes(captured) if endpoint.speech else b'', rate,
+        endpoint.active / rate * 1000, overflow, timeout * 1000, timeout * 1000,
+        trim_samples / rate * 1000)
+    # Preserve 300ms pre-roll; do not transcribe seconds of initial room silence.
+    return CapturedAudio(bytes(captured[trim_samples * 2:]) if endpoint.speech else b'', rate,
                          truncated or overflow, cancelled(), endpoint_at or end, speech_end,
                          capture_started, speech_started, end, reason)

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import copy
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -130,6 +133,7 @@ class Settings:
 
 def default_config() -> dict[str, Any]:
     return {
+        "config_version": 2,
         "performance": {"profile": "fast"},
         "language": "uk",
         "assistant_name": "Валера",
@@ -221,12 +225,9 @@ def default_config() -> dict[str, Any]:
         },
         "file_search": {"all_local_drives": False, "budget_seconds": 15},
         "user_directories": [
-            str(Path.home() / "Desktop"),
-            str(Path.home() / "Documents"),
-            str(Path.home() / "Downloads"),
-            str(Path.home() / "Pictures"),
-            str(Path.home() / "Videos"),
-            str(Path.home() / "Music"),
+            str(Path.home() / name)
+            for name in ("Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music")
+            if platform.system() != 'Linux' or (Path.home() / name).is_dir()
         ],
     }
 
@@ -242,12 +243,25 @@ def _deep_merge(base: dict[str, Any], custom: dict[str, Any]) -> dict[str, Any]:
 
 
 def merge_config(custom: dict[str, Any]) -> dict[str, Any]:
+    custom = migrate_config(custom)
     result = _deep_merge(default_config(), custom)
     old = custom.get('stt', {})
     if 'profile' in old:
         result['stt']['quality_profile'] = None
     elif old.get('quality_profile') == 'balanced' and 'profiles' not in old:
         result['stt']['profiles']['balanced']['model'] = 'large-v3-turbo'
+    return result
+
+
+def migrate_config(custom):
+    """In-memory only; unknown user fields survive, source file is untouched."""
+    result = copy.deepcopy(custom)
+    version = result.get('config_version', 1)
+    if type(version) is not int or version not in (1, 2):
+        raise ConfigError('Unsupported config_version')
+    if version == 1:
+        result['config_version'] = 2
+        logging.getLogger(__name__).info('Config migration v1 -> v2 (in memory)')
     return result
 
 
@@ -283,6 +297,8 @@ def apply_performance_profile(
 
 def validate_config(config: dict[str, Any]) -> None:
     try:
+        if config.get('config_version', 2) != 2:
+            raise ConfigError('Unsupported config_version')
         stt = config['stt']
         if stt['backend'] not in {'auto', 'faster-whisper', 'sherpa-onnx', 'vosk'}:
             raise ConfigError('Invalid stt.backend')
@@ -417,11 +433,12 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError(f"Некоректна структура config.json: {exc}") from exc
 
 
-def load_settings(profile_override: str | None = None) -> Settings:
-    root = Path(__file__).resolve().parent
+def load_settings(profile_override: str | None = None, *, read_only=False, root=None) -> Settings:
+    root = Path(root) if root is not None else Path(__file__).resolve().parent
     paths = ProjectPaths.from_root(root)
-    paths.ensure()
-    load_dotenv(paths.env_file)
+    if not read_only:
+        paths.ensure()
+        load_dotenv(paths.env_file)
 
     config = default_config()
     if paths.config_file.exists():

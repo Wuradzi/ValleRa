@@ -50,6 +50,8 @@ class DiagnosticsService:
         )
 
         for module in self.REQUIRED_MODULES:
+            if module == 'pyttsx3' and platform.system() != 'Windows':
+                continue  # Linux TTS is explicitly deferred, not a missing core dependency.
             try:
                 importlib.import_module(module)
                 self._add(checks, f"module:{module}", True, "доступний")

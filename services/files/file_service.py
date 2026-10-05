@@ -8,7 +8,8 @@ import time
 import logging
 from collections import deque
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from uuid import uuid4
 
 from send2trash import send2trash
 
@@ -17,17 +18,8 @@ logger = logging.getLogger(__name__)
 
 def local_drive_roots():
     """Discover local fixed/removable Windows volumes, never mapped network drives."""
-    if os.name != "nt":
-        return []
-    import ctypes
-    from ctypes import wintypes
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.GetLogicalDrives.restype = wintypes.DWORD
-    kernel.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
-    kernel.GetDriveTypeW.restype = wintypes.UINT
-    mask = kernel.GetLogicalDrives()
-    return [Path(f"{chr(65 + index)}:/") for index in range(26)
-            if mask & (1 << index) and kernel.GetDriveTypeW(f"{chr(65 + index)}:\\") in {2, 3}]
+    from services.platform import resolve_platform
+    return resolve_platform().drive_roots()
 
 
 class FileService:
@@ -35,7 +27,7 @@ class FileService:
         self.allowed = [
             Path(path).expanduser().resolve()
             for path in allowed_directories
-            if path
+            if path and (os.name == 'nt' or not PureWindowsPath(path).drive)
         ]
         self.search_roots = list(dict.fromkeys(self.allowed + (local_drive_roots() if all_local_drives else [])))
         self.budget_seconds = budget_seconds
@@ -46,6 +38,21 @@ class FileService:
         self._query = None
         self._expires = 0
         self._skipped = 0
+        self._progress_lock = threading.Lock()
+        self._progress = None
+        self._cancel_search = threading.Event()
+
+    def search_snapshot(self):
+        with self._progress_lock:
+            return dict(self._progress) if self._progress is not None else None
+
+    def cancel_search(self, request_id):
+        with self._progress_lock:
+            if not self._progress or not self._progress['active'] or self._progress['id'] != request_id:
+                return False
+            self._cancel_search.set()
+            self._progress.update(stage='cancelling', cancel_requested=True)
+            return True
 
     def is_allowed(self, path: Path) -> bool:
         resolved = path.expanduser().resolve()
@@ -124,21 +131,32 @@ class FileService:
             started = time.monotonic()
             if self._stopped.is_set():
                 return []
+            with self._progress_lock:
+                self._cancel_search = threading.Event()
+                self._progress = dict(id=uuid4().hex, active=True, stage='searching', started_at=started,
+                                      cancel_requested=False, checked=0, matches=0)
             if key != self._query or self._cursor is None or time.monotonic() >= self._expires:
                 self._close_cursor()
                 self._query, self._skipped = key, 0
                 self._cursor = self._walk()
             deadline = time.monotonic() + self.budget_seconds
             complete = False
-            while not self._stopped.is_set() and time.monotonic() < deadline and len(result) < limit:
+            while not self._stopped.is_set() and not self._cancel_search.is_set() and time.monotonic() < deadline and len(result) < limit:
                 try:
                     path = next(self._cursor)
                 except StopIteration:
                     complete = True
                     self._close_cursor()
                     break
+                except BaseException:
+                    self._close_cursor()
+                    with self._progress_lock:
+                        self._progress.update(active=False, stage='failed')
+                    raise
                 if path is None:
                     continue
+                with self._progress_lock:
+                    self._progress['checked'] += 1
                 if query and query.lower() not in path.name.lower():
                     continue
                 if extension and path.suffix.lower() != extension.lower():
@@ -150,12 +168,19 @@ class FileService:
                     if not self.is_allowed(path):
                         continue
                     result.append((modified, path))
+                    with self._progress_lock:
+                        self._progress['matches'] = len(result)
                 except (OSError, ValueError):
                     self._skipped += 1
-            if self._stopped.is_set():
-                self._close_cursor()
+            with self._progress_lock:
+                cancelled = self._cancel_search.is_set() or self._stopped.is_set()
+                if cancelled:
+                    self._close_cursor()
+                    result.clear()
+                self._progress.update(active=False, stage='cancelled' if cancelled else 'completed' if complete else 'partial')
             self._expires = time.monotonic() + 300
-            self.search_status = {"complete": complete, "resumable": self._cursor is not None,
+            self.search_status = {"complete": complete and not cancelled, "resumable": self._cursor is not None,
+                                  "cancelled": cancelled,
                                   "skipped": self._skipped, "roots": [str(root) for root in self.search_roots],
                                   "duration_ms": round((time.monotonic() - started) * 1000)}
             logger.info("File search page matches=%s complete=%s resumable=%s skipped=%s duration_ms=%s",
@@ -177,11 +202,8 @@ class FileService:
         path = path.expanduser().resolve(strict=True)
         if not path.is_file() or not self.is_allowed(path):
             raise PermissionError("Файл поза дозволеними каталогами")
-        if os.name == "nt":
-            os.startfile(path)
-        else:
-            import subprocess
-            subprocess.Popen(["xdg-open", str(path)])
+        from services.platform import resolve_platform
+        resolve_platform().open_file(path)
 
     def copy(self, source: Path, destination: Path) -> Path:
         target = destination / source.name if destination.is_dir() else destination

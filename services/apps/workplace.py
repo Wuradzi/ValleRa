@@ -15,7 +15,19 @@ from core.console import console_print
 from core.confirmation import ConfirmationPrompt
 from core.models import SkillResult
 from core.security import sanitized_environment
-from services.apps.workplace_windows import application_evidence, default_browser_executable
+from services.platform import resolve_platform
+
+
+def application_evidence(path):
+    resolve_platform()._driver('workplace')
+    from services.apps.workplace_windows import application_evidence as inspect
+    return inspect(path)
+
+
+def default_browser_executable():
+    resolve_platform()._driver('workplace')
+    from services.apps.workplace_windows import default_browser_executable as inspect
+    return inspect()
 
 WORKPLACE = re.compile(r"^підготуй робоче місце(?:\s*:\s*|\s+|(?=[.!?]*$))(.*?)[.!?]*$", re.I)
 WORK_MODE = re.compile(r'^(?:(?:увімкни|ввімкни|активуй)\s+)?режим\s+[«"“]?робота[»"”]?[.!?]*$', re.I)
@@ -177,7 +189,7 @@ class WorkplaceAgent:
     async def run(self, command, context, *, _names=None):
         if self.busy:
             return SkillResult(True, "Спочатку завершіть або скасуйте поточне завдання.")
-        if os.name != "nt" or context.services["state"].get("mode") != "chat":
+        if not resolve_platform().supports('workplace') or context.services["state"].get("mode") != "chat":
             return SkillResult(True, "Цей сценарій доступний у звичайному режимі на Windows.")
         # Short activation alias; not a persistent permission/mode change.
         command = command.strip()
@@ -200,7 +212,7 @@ class WorkplaceAgent:
         self._last_task = None
         self.cancelled.clear()
         self.current = {"id": uuid4().hex, "title": "Налаштувати робоче місце" if configuring else "Підготувати робочі програми",
-                        "kind": "configure" if configuring else "launch",
+                        "kind": "configure" if configuring else "launch", "started_at": time.monotonic(),
                         "status": "planning", "detail": "Перевіряю весь список до запуску.",
                         "steps": [{"name": name, "requested_name": name, "status": "pending", "detail": "Перевірити програму"}
                                   for name in names]}

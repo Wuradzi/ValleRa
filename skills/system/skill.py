@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import subprocess
 from datetime import datetime
 
 import psutil
 
 from core.models import SkillResult
+from services.platform import resolve_platform
 
 
 TIME_COMMANDS = {"котра година", "який час", "скажи час"}
@@ -57,37 +56,27 @@ async def handle(command, context, services):
             {"command_type": "assistant_shutdown", "shutdown_app": True},
         )
     if command == "скасуй вимкнення":
-        completed = await asyncio.to_thread(
-            subprocess.run,
-            ["shutdown", "/a"],
-            check=False,
-            capture_output=True,
-        )
+        completed = await asyncio.to_thread(resolve_platform().system_action, 'cancel_shutdown')
         response = (
             "Вимкнення скасовано."
-            if completed.returncode == 0
+            if completed
             else "Не вдалося скасувати вимкнення."
         )
         return SkillResult(True, response, {"command_type": "shutdown_cancel"})
     if command == "вимкни комп'ютер":
         if not await context.confirm("вимкнення комп'ютера через 60 секунд"):
             return SkillResult(True, "")
-        completed = await asyncio.to_thread(
-            subprocess.run,
-            ["shutdown", "/s", "/t", "60"],
-            check=False,
-            capture_output=True,
-        )
+        completed = await asyncio.to_thread(resolve_platform().system_action, 'shutdown')
         response = (
             "Комп'ютер буде вимкнено через 60 секунд."
-            if completed.returncode == 0
+            if completed
             else "Windows не прийняла команду вимкнення."
         )
         return SkillResult(True, response, {"command_type": "shutdown"})
     if command == "заблокуй екран":
         if not await context.confirm("блокування екрана"):
             return SkillResult(True, "")
-        locked = bool(await asyncio.to_thread(ctypes.windll.user32.LockWorkStation))
+        locked = bool(await asyncio.to_thread(resolve_platform().system_action, 'lock'))
         return SkillResult(
             True,
             "Екран заблоковано." if locked else "Windows не підтвердила блокування екрана.",

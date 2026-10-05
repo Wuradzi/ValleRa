@@ -7,6 +7,7 @@ import platform
 from rapidfuzz import fuzz
 
 from core.models import SkillResult
+from services.platform import PlatformOperationError
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,10 @@ class CommandRouter:
                     skill.handle(normalized, context),
                     timeout=120.0,
                 )
+            except PlatformOperationError as exc:
+                logger.warning('Platform capability unavailable: %s', exc.capability)
+                return SkillResult(True, str(exc), {'success': False, 'accepted': False,
+                                                   'status': exc.status, 'capability': exc.capability})
             except asyncio.TimeoutError:
                 logger.error("Skill timed out: %s", skill.name)
                 return SkillResult(True, "Час виконання дії минув. Результат невідомий; автоматично не повторюю.",

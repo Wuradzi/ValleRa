@@ -12,8 +12,22 @@ class ApplicationIndexer:
         self.aliases = aliases
 
     def rebuild(self) -> list[dict]:
+        from services.platform import resolve_platform
+        if not resolve_platform().supports('application_launch'):
+            return self.all()  # Read saved/manual index; do not scan Windows paths.
         state = self.file.load()
         found: dict[str, dict] = {}
+        if resolve_platform().os == 'Linux':
+            # Only explicitly configured entries; never reuse a Windows auto-index.
+            for item in state.get('manual', []):
+                found[item['name'].lower()] = dict(item, aliases=list(item.get('aliases', [])))
+            for alias, target in self.aliases.items():
+                matches = [app for app in found.values() if app['name'].casefold() == target.casefold()]
+                if len(matches) == 1 and alias not in matches[0]['aliases']:
+                    matches[0]['aliases'].append(alias)
+            state['applications'] = sorted(found.values(), key=lambda app: app['name'].lower())
+            self.file.save(state)
+            return state['applications']
         roots = [
             Path(os.getenv("PROGRAMDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
             Path(os.getenv("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",

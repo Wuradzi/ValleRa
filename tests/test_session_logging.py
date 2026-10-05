@@ -287,8 +287,12 @@ class MainSessionTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         journal = SessionLogging(Path(temp.name) / "sessions")
         terminal = io.StringIO()
+        async def invoke(*args):
+            return await effect()
         with (patch.object(main, "SessionLogging", return_value=journal),
-              patch.object(main, "async_main", side_effect=effect),
+              patch.object(main, "async_main", side_effect=invoke),
+              patch.object(main, 'parse_args', return_value=SimpleNamespace(doctor=False, diagnostics=False,
+                  audio_test=False, models=False, smoke_live=False)),
               redirect_stdout(terminal), redirect_stderr(io.StringIO())):
             result = main.main()
         return result, terminal.getvalue(), journal.path.read_text(encoding="utf-8")

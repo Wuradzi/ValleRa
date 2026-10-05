@@ -152,7 +152,15 @@ def _variant(connection, directory, candidate, device):
             return
         samples, digest, synthetic = read_samples(directory)
         report.update(corpus_sha256=digest, synthetic=synthetic)
-        backend = create_backend(settings, profile, process=False)
+        if profile.backend == 'moonshine-onnx':
+            from testing.probes.moonshine_candidate import MoonshineCandidate
+            backend = MoonshineCandidate(settings.paths.project_root / profile.model, settings.stt_whisper_cpu_threads)
+        else:
+            backend = create_backend(settings, profile, process=False)
+        if profile.backend == 'faster-whisper':
+            backend.recognizer.settings.benchmark_word_timestamps = candidate.get('word_timestamps', True)
+            backend.recognizer.settings.benchmark_decode_options = (
+                {'temperature': 0.0, 'best_of': 1} if candidate.get('single_pass', False) else {})
         started = time.perf_counter()
         ok, detail = backend.prepare()
         report.update(load_ms=(time.perf_counter() - started) * 1000, metadata=asdict(backend.metadata))
@@ -187,7 +195,8 @@ def _variant(connection, directory, candidate, device):
                     if profile.device == 'cuda' and backend.recognizer.actual_device != 'cuda':
                         raise RuntimeError('CUDA candidate fell back to CPU; not a GPU benchmark')
                 report['rows'].append({'id': row['id'], 'reference': row['reference'], 'transcript': result.text,
-                    'engine': result.engine, 'audio_seconds': duration, 'latency_ms': (time.perf_counter() - started) * 1000,
+                    'engine': result.engine, 'confidence': result.confidence,
+                    'audio_seconds': duration, 'latency_ms': (time.perf_counter() - started) * 1000,
                     **scores(row['reference'], result.text), **semantic_scores(row.get('semantic'), result.text)})
             report.update(status='completed', summary=aggregate(report['rows']),
                           empty_transcripts=sum(not r['transcript'].strip() for r in report['rows']))
@@ -217,13 +226,16 @@ def read_matrix(args):
         raise ValueError('Expected 1..24 candidates')
     seen = set()
     for entry in candidates:
-        if not isinstance(entry, dict) or set(entry) - {'id', 'backend', 'model', 'profile', 'device', 'compute_type'}:
+        if not isinstance(entry, dict) or set(entry) - {'id', 'backend', 'model', 'profile', 'device', 'compute_type', 'word_timestamps', 'single_pass'}:
             raise ValueError('Invalid candidate')
         if any(not isinstance(entry.get(k), str) or not entry[k] for k in ('id', 'backend', 'model')):
             raise ValueError('Candidate id/backend/model required')
-        if entry['id'] in seen or entry['backend'] not in {'vosk', 'faster-whisper', 'sherpa-onnx'}:
+        if entry['id'] in seen or entry['backend'] not in {'vosk', 'faster-whisper', 'sherpa-onnx', 'moonshine-onnx'}:
             raise ValueError('Duplicate/invalid candidate')
         seen.add(entry['id'])
+        for option in ('word_timestamps', 'single_pass'):
+            if option in entry and (type(entry[option]) is not bool or entry['backend'] != 'faster-whisper'):
+                raise ValueError('Invalid Whisper benchmark option')
         if entry.get('profile', 'balanced') not in {'quality', 'balanced', 'edge'}:
             raise ValueError('Invalid candidate profile')
         if entry.get('device', 'auto') not in {'auto', 'cpu', 'cuda'}:

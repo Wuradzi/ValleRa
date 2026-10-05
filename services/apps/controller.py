@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import subprocess
+from services.platform import resolve_platform
 import webbrowser
 import time
 
@@ -46,17 +46,16 @@ class ApplicationController:
 
     @staticmethod
     def open_default_browser() -> bool:
+        target = resolve_platform()
+        if target.os != 'Windows':
+            return bool(target.open_file('https://www.google.com/'))
         # Windows Shell treats "about" as a protocol name when no browser
         # executable is supplied, which opens the Microsoft Store chooser.
         # A normal HTTPS URL reliably delegates to the configured browser.
         return bool(webbrowser.open_new_tab("https://www.google.com/"))
 
     def open(self, app: dict) -> bool:
-        if os.name == "nt":
-            os.startfile(app["command"])
-        else:
-            subprocess.Popen([app["command"]], start_new_session=True)
-        return True
+        return resolve_platform().open_application(app)
 
     @staticmethod
     def verify_launch(app=None):

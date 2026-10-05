@@ -12,7 +12,7 @@
     "заверши роботу"
   ],
   "platforms": [
-    "windows"
+    "windows", "linux"
   ],
   "enabled": true
 }

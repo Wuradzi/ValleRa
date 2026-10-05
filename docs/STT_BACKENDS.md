@@ -363,3 +363,51 @@ An initial full run was 651/652: an old logging-worker mock lacked last_metadata
 the fixture was updated and logging 18/18 plus the full suite rerun successfully.
 ActionPolicy, TurnEnvelope, confirmation correlation, routing and TTS unchanged.
 Code is ready for RTX/live diagnostics, NOT certified to meet latency targets.
+
+## Capture budget and offline latency comparisons (2026-10-05)
+
+Unrestricted PCM capture now gives speech its own duration budget: a 15-second
+listen call waits at most 15 seconds for onset, then permits at most 15 seconds
+from acoustic onset, bounded by 30 seconds total. Silence endpoint thresholds
+are unchanged. Only initial silence is trimmed before ASR, keeping 300ms pre-roll;
+timestamps remain relative to original capture. Overflow/truncation/cancellation
+still invalidate the result as before. This does not modify Vosk confirmations.
+
+Controlled offline comparison (local models only; no audio upload):
+
+```powershell
+python tester.py --probe stt_benchmark --allow-live --timeout 2400 -- --corpus <corpus-directory> --matrix testing/stt_latency_matrix.json --variant-timeout 600
+```
+
+Despite the existing `--allow-live` opt-in name, this probe is offline. The matrix
+separates small baseline, temperature=0/best_of=1, and word_timestamps=false.
+Production decoder defaults remain unchanged. Reports include individual
+confidence values: word probabilities and segment log probabilities are not
+interchangeable calibrated ACTION scores. Compare WER/CER and confidence before
+promoting any decoding change. Entity metrics require confirmed corpus annotations.
+
+`moonshine-uk` is benchmark-only, not a runtime profile/backend. It expects
+`models/sherpa-onnx-moonshine-base-uk-quantized-2026-02-27/` with
+`encoder_model.ort`, `decoder_model_merged.ort`, `tokens.txt`, and an optional
+`sherpa-onnx` installation exposing `OfflineRecognizer.from_moonshine_v2`.
+See the [official API](https://github.com/k2-fsa/sherpa-onnx/blob/master/sherpa-onnx/python/sherpa_onnx/offline_recognizer.py)
+and [model releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models).
+Missing files/dependencies produce NOT_TESTED, not a fabricated result. There are
+no automatic downloads; check model licensing before deployment. Moonshine
+confidence is uncalibrated and marked unreliable; it cannot authorize actions.
+
+New local 24-WAV run (2026-10-05, CPU/int8, beam1, two threads):
+
+| Variant | Mean / p95 ms | WER / CER % | Mean confidence |
+|---|---|---|---|
+| small baseline | 8555 / 12572 | 24.47 / 8.97 | 0.7454 |
+| small single-pass | 8427 / 13057 | 24.47 / 8.97 | 0.7454 |
+| small no word timestamps | 6579 / 7345 | 24.47 / 8.97 | 0.6628 |
+
+All 24 transcripts were identical across these variants. This is a single
+sequential run, not a statistical guarantee or live microphone measurement.
+No-timestamps is promising (~23% lower mean), but remains benchmark-only because
+confidence changes. Moonshine NOT_TESTED: local files/runtime absent. Entity
+annotations absent; no separate filename/intent correctness claim. First tester
+attempt hit its outer 300s deadline after saving baseline; remaining variants
+were rerun with 1800s. Functional suite: 690/690, no skips; Ruff passed.

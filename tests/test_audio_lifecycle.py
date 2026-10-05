@@ -498,7 +498,7 @@ class SpeakerLifecycleTests(unittest.IsolatedAsyncioTestCase):
     def test_default_windows_output_uses_direct_speech_without_wav(self):
         speaker = self.speaker()
         with (
-            patch("core.speak.os.name", "nt"),
+            patch("services.platform.resolver.PlatformServices.supports", return_value=True),
             patch.object(speaker, "_generate_with_windows_speech") as synth,
         ):
             speaker._speak_sync("Привіт")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 import threading
 import time
 from dataclasses import replace
@@ -36,7 +37,7 @@ from services.update_checker import UpdateChecker
 from services.web.search import WebSearchService
 from services.web.answers import WebAnswerService
 from services.web.weather import WeatherService
-from services.windows.window_controller import WindowController
+from services.platform import resolve_platform
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 class ValleRaApp:
     def __init__(self, settings, secret_store, text_only: bool = False, *, performance=None):
         self.settings = settings
+        self.platform = resolve_platform()
         self.text_only = text_only
         self.command_queue: asyncio.Queue[TurnEnvelope] = asyncio.Queue(maxsize=1)
         self.metrics = MetricsCollector(settings.paths.data_dir / "metrics.jsonl")
@@ -97,7 +99,8 @@ class ValleRaApp:
             "app_indexer": app_indexer,
             "workplace": WorkplaceAgent(app_indexer, settings.paths.data_dir / "workplace.json"),
             "apps": ApplicationController(app_indexer),
-            "windows": WindowController(),
+            "windows": self.platform.windows(),
+            "platform": self.platform,
             "files": FileService(settings.user_directories,
                                  all_local_drives=settings.file_search_all_local_drives,
                                  budget_seconds=settings.file_search_budget_seconds),
@@ -230,6 +233,7 @@ class ValleRaApp:
             await asyncio.gather(*cleanup, return_exceptions=True)
             await asyncio.gather(*tasks, return_exceptions=True)
             self._tasks = []
+            logger.info('Session summary: %s', perf.session_summary())
             if hasattr(self, "_dispatch_guard"):
                 self._dispatch_guard.pending.clear()
 
@@ -391,6 +395,7 @@ class ValleRaApp:
             finally:
                 if self.web_ui is not None:
                     self.web_ui.publish("response_end")
+                timing.finish()
                 SPEECH_SCOPE.reset(speech_token)
                 CURRENT_TURN.reset(token)
                 self.command_queue.task_done()
@@ -552,12 +557,69 @@ class ValleRaApp:
             if text.strip():
                 await self._submit_text(text.strip(), confirmation_id)
 
+    def _delivery_context(self):
+        """Hold references, not executable data; never bind delayed input to a new prompt."""
+        dialogue = self.processor.dialogue_state
+        return (dialogue.pending, dialogue.proposals.pending,
+                getattr(self.services.get('tasks'), 'pending', None))
+
+    def _delivery_notice(self, text):
+        console_print(text)
+        if self.web_ui is not None:
+            self.web_ui.publish('notice', text)
+
+    def _cancel_waiting_input(self):
+        waiting = getattr(self, '_waiting_input', None)
+        if waiting is not None:
+            waiting.set()
+            return True
+        return False
+
+    async def _wait_for_text_delivery(self):
+        if self.command_idle.is_set() or self.confirmation.awaiting:
+            return True
+        if getattr(self, '_waiting_input', None) is not None:
+            self._delivery_notice('Один запит уже очікує. Цей не прийнято; повторіть його після завершення або зупинки очікування.')
+            return False
+        cancelled = asyncio.Event()
+        self._waiting_input = cancelled
+        self._delivery_notice('Поточна операція ще виконується. Запит очікує; кнопка зупинки зніме його з очікування, але не скасує вже запущену дію.')
+        ready = asyncio.create_task(self._wait_for_input_slot())
+        stop = asyncio.create_task(cancelled.wait())
+        try:
+            await asyncio.wait({ready, stop}, return_when=asyncio.FIRST_COMPLETED)
+            if cancelled.is_set():
+                return False
+            await ready
+            return True
+        finally:
+            for task in (ready, stop):
+                task.cancel()
+            await asyncio.gather(ready, stop, return_exceptions=True)
+            if getattr(self, '_waiting_input', None) is cancelled:
+                self._waiting_input = None
+
     async def _submit_text(self, text, confirmation_id=None):
+        if text.strip() == '/status':
+            from services.health.runtime import runtime_status
+            status = runtime_status(self)
+            console_print(status)
+            if self.web_ui is not None:
+                self.web_ui.publish('notice', status)
+            return
         if self.web_ui is not None:
             self.web_ui.publish("user", text, source="text")
         if confirmation_id is not None and confirmation_id != self.confirmation.request_id:
             if not self.confirmation.submit(text, confirmation_id) and self.web_ui is not None:
                 self.web_ui.publish("notice", "Підтвердження змінилося. Перевірте поточну дію й повторіть відповідь.")
+            return
+        if confirmation_id is None and not self.confirmation.awaiting and re.fullmatch(
+                r'(?:команда[\s:,-]+)?скасуй\s+пошук[.!?]*', text.strip(), re.I):
+            files = self.services.get('files')
+            progress = files.search_snapshot() if files is not None else None
+            cancelled = bool(progress and files.cancel_search(progress['id']))
+            self._delivery_notice('Запит на скасування пошуку прийнято. Очікую завершення поточного кроку.'
+                                  if cancelled else 'Активного пошуку файлів немає. Нічого не скасовано.')
             return
         if CANCEL_WORKPLACE.fullmatch(text):
             self.processor.interrupt_conversation(discard_proposal=True)
@@ -571,6 +633,7 @@ class ValleRaApp:
         if confirmation_id is not None or self.confirmation.awaiting:
             self.confirmation.submit(text, confirmation_id)
             return
+        delivery_context = self._delivery_context()
         # Only tool-free chat is cancelled. File/app operations keep running;
         # muting their output does not mean cancelling or undoing their effects.
         if PAUSE_CONVERSATION.fullmatch(text) or STOP_SPEECH.fullmatch(text):
@@ -585,15 +648,35 @@ class ValleRaApp:
                 self.web_ui.publish("notice", "Розмову призупинено. Мікрофон не вимкнено.")
             return
         if STOP_SPEECH.fullmatch(text):
+            if self._cancel_waiting_input():
+                self._delivery_notice('Запит знято з очікування. Уже запущені локальні дії не скасовано.')
             return
-        await self._wait_for_input_slot()
+        if not await self._wait_for_text_delivery():
+            return
         # A local action may have entered confirmation while we were stopping
         # speech. Never let its reply become a separate local command.
         if self.confirmation.awaiting:
             logger.info("confirmation_reply_rejected=request_changed_during_delivery")
+            self._delivery_notice('Під час очікування з’явилося підтвердження. Запит не виконано; перевірте поточну дію, потім повторіть запит.')
+            return
+        if any(before is not after for before, after in zip(delivery_context, self._delivery_context())):
+            self._delivery_notice('Контекст завдання змінився під час очікування. Запит не виконано, щоб не застосувати його до іншого уточнення. Повторіть запит.')
             return
         self.command_idle.clear()
         await self._enqueue_command(text, "text", 1.0)
+
+    def _task_progress(self):
+        from core.task_progress import TaskProgressRegistry, workplace_progress, file_search_progress
+        if not hasattr(self, '_progress_registry'):
+            registry = TaskProgressRegistry()
+            workplace = self.services.get('workplace')
+            files = self.services.get('files')
+            if workplace is not None:
+                registry.register('workplace', lambda: workplace_progress(workplace), workplace.cancel)
+            if files is not None:
+                registry.register('file_search', lambda: file_search_progress(files), files.cancel_search)
+            self._progress_registry = registry
+        return self._progress_registry
 
     def web_state(self):
         """Only explicit UI fields: never export settings, history files or secrets."""
@@ -619,6 +702,7 @@ class ValleRaApp:
             status = "processing_audio"
         else:
             status = "ready"
+        task = self._task_progress().current()
         return {"status": status, "microphone": self.microphone_enabled,
                 "microphone_available": self.listener is not None and not self._voice_unavailable,
                 "microphone_stopping": not self.microphone_enabled and self._voice_inflight,
@@ -627,13 +711,20 @@ class ValleRaApp:
                 "provider": self.llm.active_name or "не вибрано",
                 "confirmation": self.confirmation.request_id,
                 "confirmation_prompt": redact_user_text(self.confirmation.prompt),
-                "task": self.services["workplace"].snapshot(),
+                "task": task.public() if task else None,
                 "tts_busy": self.speaker.busy,
                 "tts_playback": self.speaker.playback_active,
                 "tts_glow": self.speaker.glow_state()}
 
     async def web_control(self, action, data):
-        if action == "cancel_task":
+        if action == 'cancel_progress':
+            if not self._task_progress().cancel(data.get('kind'), data.get('task_id')):
+                return 409, {'error': 'Це завдання вже неактивне або змінилося.'}
+        elif action == 'cancel_search':
+            files = self.services.get('files')
+            if files is None or not files.cancel_search(data.get('task_id')):
+                return 409, {'error': 'Цей пошук уже неактивний.'}
+        elif action == "cancel_task":
             if not self.services["workplace"].cancel(data.get("task_id")):
                 return 409, {"error": "Це завдання вже неактивне."}
         elif action == "confirm":
@@ -656,9 +747,11 @@ class ValleRaApp:
             else:
                 self._mic_ready.clear()
         elif action == "stop":
+            waiting_cancelled = self._cancel_waiting_input()
             self.processor.interrupt_conversation(discard_proposal=True)
             await self.speaker.stop()
-            self.web_ui.publish("notice", "Відповідь зупинено. Запущені локальні дії не скасовано.")
+            self.web_ui.publish("notice", ("Запит знято з очікування. " if waiting_cancelled else "") +
+                                "Відповідь зупинено. Запущені локальні дії не скасовано.")
         elif action in {"pause", "resume"}:
             if self.confirmation.awaiting or self.services["state"].get("mode") != "chat":
                 return 409, {"error": "Спочатку завершіть підтвердження або спеціальний режим."}

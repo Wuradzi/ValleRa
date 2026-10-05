@@ -9,7 +9,6 @@ from config import ConfigError, load_settings
 from core.console import console_getpass, console_print
 from core.logging_setup import SessionLogging, configure_logging
 from core.single_instance import SingleInstance
-from diagnostics import run_diagnostics
 from services.storage.secret_store import SecretStore
 
 
@@ -21,7 +20,10 @@ class ConsoleArgumentParser(argparse.ArgumentParser):
 
 def parse_args() -> argparse.Namespace:
     parser = ConsoleArgumentParser(description="ValleRa Voice Assistant")
-    parser.add_argument("--diagnostics", action="store_true")
+    maintenance = parser.add_mutually_exclusive_group()
+    for command in ('doctor', 'diagnostics', 'audio-test', 'models', 'smoke-live'):
+        maintenance.add_argument('--' + command, action='store_true')
+    parser.add_argument('--probe-audio', action='store_true', help='Explicit microphone recording during doctor')
     parser.add_argument("--text-only", action="store_true")
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--web-ui", action="store_true", help="Локальний вебінтерфейс")
@@ -50,8 +52,8 @@ def unlock_vault(settings) -> SecretStore:
     return vault
 
 
-async def async_main() -> int:
-    args = parse_args()
+async def async_main(args=None) -> int:
+    args = args or parse_args()
     if not 0 <= args.web_port <= 65535:
         console_print("Порт має бути від 0 до 65535.")
         return 2
@@ -82,8 +84,6 @@ async def async_main() -> int:
 
     try:
         vault = unlock_vault(settings)
-        if args.diagnostics:
-            return await run_diagnostics(settings, vault)
 
         from core.metrics import MetricsCollector
         from core.performance import PerformanceRecorder
@@ -127,12 +127,20 @@ async def async_main() -> int:
 
 
 def main() -> int:
+    args = parse_args()
+    if any(getattr(args, name) for name in ('doctor', 'diagnostics', 'audio_test', 'models', 'smoke_live')):
+        from services.health.cli import run
+        try:
+            return run(args, Path(__file__).resolve().parent)
+        except (Exception, KeyboardInterrupt) as exc:
+            console_print(f'Перевірку не завершено: {type(exc).__name__}')
+            return 1
     session = SessionLogging(Path(__file__).resolve().parent / "logs" / "sessions")
     try:
         with session:
             console_print(f"Журнал сесії: {session.path}")
             try:
-                exit_code = asyncio.run(async_main())
+                exit_code = asyncio.run(async_main(args))
             except KeyboardInterrupt:
                 logging.getLogger("session.lifecycle").info("Shutdown requested: Ctrl+C")
                 console_print("\nValleRa завершено.")

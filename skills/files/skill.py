@@ -7,7 +7,18 @@ from datetime import datetime, timedelta
 from core.models import SkillResult
 
 
+def cancelled_result(files):
+    status = getattr(files, 'search_status', {})
+    if isinstance(status, dict) and status.get('cancelled'):
+        return SkillResult(True, 'Пошук скасовано. Файли не відкривалися.',
+                           {'command_type': 'file_search_cancelled', 'status': 'cancelled'})
+    return None
+
+
 def search_result(files, found, services):
+    cancelled = cancelled_result(files)
+    if cancelled is not None:
+        return cancelled
     status = getattr(files, "search_status", {})
     status = status if isinstance(status, dict) else {}
     resumable = status.get("resumable", False)
@@ -41,6 +52,9 @@ async def handle(command, context, services):
 
     if "найбільш" in command:
         found = await asyncio.to_thread(files.largest, 10)
+        cancelled = cancelled_result(files)
+        if cancelled is not None:
+            return cancelled
         rows = []
         for path in found:
             try:
@@ -80,6 +94,9 @@ async def handle(command, context, services):
         modified_after = datetime.now() - timedelta(days=30)
 
     found = await asyncio.to_thread(files.search, query, extension, modified_after, limit=5)
+    cancelled = cancelled_result(files)
+    if cancelled is not None:
+        return cancelled
     if not found:
         return search_result(files, found, services)
 

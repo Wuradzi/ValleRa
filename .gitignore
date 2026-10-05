@@ -60,3 +60,5 @@ htmlcov/
 !/docs/STT_BACKENDS.md
 !/docs/TECHNICAL_SPECIFICATION.md
 !/docs/PUBLICATION.md
+!/docs/DEVELOPER_VALIDATION.md
+!/docs/LINUX_RUNTIME.md

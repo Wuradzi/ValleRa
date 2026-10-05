@@ -654,6 +654,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Єдиний комплексний тестер ValleRa.")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--all", action="store_true", help="Перевірити всі модулі")
+    selection.add_argument('--release-check', action='store_true', help='Deterministic checkpoint validation')
+    parser.add_argument('--with-benchmark', action='store_true')
+    parser.add_argument('--with-gpu', action='store_true')
+    parser.add_argument('--with-live', action='store_true')
+    parser.add_argument('--corpus', help='Corpus for optional release benchmark')
     selection.add_argument("--module", nargs="+", choices=GROUPS, help="Обрати модулі")
     selection.add_argument("--list", action="store_true", help="Показати доступні модулі")
     selection.add_argument("--probe", choices=PROBES, help="Жива перевірка/замір; параметри після --")
@@ -665,6 +670,11 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=positive_timeout, default=300, help="Ліміт запуску в секундах (300)")
     parser.add_argument("--_worker-report", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.release_check:
+        from testing.release_check import run
+        return run(args)
+    if args.with_benchmark or args.with_gpu or args.with_live or args.corpus:
+        parser.error('These options require --release-check; probe options belong after --.')
     args.probe_args = probe_args
     if probe_args and not args.probe:
         parser.error("Параметри після -- призначені лише для --probe.")
@@ -1588,7 +1598,9 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock, Mock
         app = object.__new__(ValleRaApp)
         app.web_ui = None
-        app.processor = SimpleNamespace(interrupt_conversation=Mock())
+        app.services = {}
+        app.processor = SimpleNamespace(interrupt_conversation=Mock(), dialogue_state=SimpleNamespace(
+            pending=None, proposals=SimpleNamespace(pending=None)))
         app.speaker = SimpleNamespace(stop=AsyncMock())
         app.confirmation = SimpleNamespace(submit=Mock(return_value=False), awaiting=False, request_id='request')
         app.command_queue = asyncio.Queue()
@@ -1614,7 +1626,10 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import AsyncMock, Mock
         app = object.__new__(ValleRaApp)
         app.web_ui = None
-        app.processor = SimpleNamespace(interrupt_conversation=Mock())
+        app.services = {}
+        app.command_idle = asyncio.Event()
+        app.processor = SimpleNamespace(interrupt_conversation=Mock(), dialogue_state=SimpleNamespace(
+            pending=None, proposals=SimpleNamespace(pending=None)))
         app.speaker = SimpleNamespace(stop=AsyncMock())
         app.confirmation = SimpleNamespace(submit=Mock(), awaiting=False)
         async def stop():
@@ -1650,7 +1665,9 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
                 await finish.wait()
                 return SkillResult(True, 'Застаріла відповідь.')
             return SkillResult(True, 'Нова відповідь.')
-        app.processor = SimpleNamespace(process=AsyncMock(side_effect=process), interrupt_conversation=Mock())
+        app.services = {}
+        app.processor = SimpleNamespace(process=AsyncMock(side_effect=process), interrupt_conversation=Mock(),
+                                        dialogue_state=SimpleNamespace(pending=None, proposals=SimpleNamespace(pending=None)))
         played = []
         with patch.object(speaker, '_speak_sync', side_effect=played.append), \
                 patch.object(speaker, '_stop_sync'), patch('core.speak.console_print'):

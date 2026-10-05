@@ -61,7 +61,8 @@ async def open_application(query, context, services):
             accepted = await asyncio.to_thread(services["apps"].open_default_browser)
         except Exception as exc:
             return SkillResult(True, f"Не вдалося запустити браузер: {exc}",
-                               {"command_type": "open_browser", "accepted": False, "success": False})
+                               {"command_type": "open_browser", "accepted": False, "success": False,
+                                "status": getattr(exc, 'status', 'execution_failed')})
         return await launch_result(services["apps"], accepted, "браузера", command_type="open_browser")
     matches = await asyncio.to_thread(services["apps"].find, query)
     if not matches:
@@ -80,7 +81,8 @@ async def open_application(query, context, services):
         accepted = await asyncio.to_thread(services["apps"].open, matches[0])
     except Exception as exc:
         return SkillResult(True, f"Не вдалося запустити {matches[0]['name']}: {exc}",
-                           {"command_type": "open_application", "accepted": False, "success": False})
+                           {"command_type": "open_application", "accepted": False, "success": False,
+                            "status": getattr(exc, 'status', 'execution_failed')})
     return await launch_result(services["apps"], accepted, matches[0]["name"], matches[0])
 
 

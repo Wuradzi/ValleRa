@@ -10,8 +10,8 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-vis
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .workspace { position: relative; width: min(100%, 640px); min-height: 430px; display: flex; flex-direction: column; border: 1px solid #ffffff29; border-radius: 27px; background: linear-gradient(125deg, #414348e8, #37393fef 52%, #414047ee); box-shadow: inset 0 1px 0 #ffffff0c, 0 25px 90px #0006; }
 .workspace::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: radial-gradient(ellipse at 50% 8%, #5396a317, transparent 56%); }
-.presence { position: relative; text-align: center; padding: 100px 24px 6px; }
-.portrait { position: absolute; width: 146px; height: 175px; top: -70px; left: calc(50% - 73px); }
+.presence { position: relative; text-align: center; padding: 78px 24px 16px; }
+.portrait { position: absolute; width: 120px; height: 144px; top: -66px; left: calc(50% - 60px); }
 .portrait::before { content: ""; position: absolute; inset: 3% -12% -1%; border-radius: 50%; background: radial-gradient(ellipse, #a13ce82a, transparent 70%); pointer-events: none; }
 .face { position: relative; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 13px 12px #0004); }
 .features { color: var(--face-light); fill: currentColor; filter: drop-shadow(0 0 3px #df85ff) drop-shadow(0 0 var(--light-spread) #b62bed); }
@@ -21,6 +21,9 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-vis
 .mouth-echo { stroke-width: .55; stroke-opacity: .48; }
 h1 { font-size: 19px; font-weight: 400; line-height: 1.4; margin: 0 0 8px; letter-spacing: -.3px; }
 .voice-controls { display: flex; justify-content: center; gap: 9px; }
+.status-detail { max-width: 440px; min-height: 2.8em; margin: 0 auto 10px; color: #bcc1cc; font-size: .8rem; line-height: 1.4; }
+.edit-transcript { display: block; margin: 8px 0 0 auto; padding: 4px 8px; color: #dcb3f3; background: transparent; font-size: .75rem; }
+#stop[aria-busy="true"] { border-color: #dcb3f3; }
 .round-button { width: 37px; height: 37px; border-radius: 50%; padding: 9px; box-shadow: 0 3px 8px #0003, inset 0 1px 0 #ffffff09; }
 .round-button svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .round-button .solid { fill: currentColor; stroke: none; }
@@ -31,17 +34,19 @@ h1 { font-size: 19px; font-weight: 400; line-height: 1.4; margin: 0 0 8px; lette
 .conversation { position: relative; margin-top: auto; padding: 0 15px 15px; min-width: 0; }
 .composer { display: flex; align-items: flex-end; gap: 4px; border: 1px solid #ffffff1d; background: #ffffff0b; box-shadow: inset 0 1px 5px #0001; border-radius: 9px; padding: 4px; }
 .composer:focus-within { border-color: #a5dfe270; }
-textarea { width: 100%; min-height: 30px; max-height: 120px; resize: vertical; border: none; border-radius: 4px; background: transparent; color: #f0f1f5; padding: 6px 8px; font-size: .875rem; line-height: 1.5; }
+textarea { width: 100%; min-height: 38px; max-height: 144px; resize: none; border: none; border-radius: 4px; background: transparent; color: #f0f1f5; padding: 8px; font-size: .875rem; line-height: 1.5; }
 textarea::placeholder { color: #abb0bb; opacity: 1; }
 textarea:focus-visible { outline-offset: -2px; }
-#send { flex: 0 0 31px; height: 30px; padding: 0; border: 0; font-size: 21px; }
+#send { flex: 0 0 38px; height: 38px; padding: 0; border: 1px solid #dcb3f340; background: #985ac538; font-size: 21px; }
+#jump-latest { display: block; margin: -8px auto 10px; font-size: .75rem; background: #30263e; border-color: #dcb3f350; }
+#draft-note { margin: 0 0 7px; text-align: left; color: #dcb3f3; }
 .about-button { position: absolute; right: 14px; top: 10px; border: 0; background: none; color: #9297a3; padding: 0 8px 6px; font-size: 22px; line-height: 1; letter-spacing: 2px; }
 .conversation-header, .dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .conversation-header { display: none; margin: 0 0 12px; }
 .history-open .conversation-header { display: flex; }
 h2 { font-size: 14px; font-weight: 500; margin: 0; }
 .conversation-header button { font-size: 11px; }
-.messages { max-height: min(38svh, 300px); min-height: 150px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0; }
+.messages { height: clamp(200px, 42svh, 390px); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0 3px; }
 .messages.expanded { max-height: min(48svh, 440px); }
 .messages:not(.expanded) > :not(.current-turn):not(.empty) { display: none; }
 .message { width: fit-content; max-width: 95%; margin: 0 0 13px; padding: 12px 14px; border-radius: 15px 15px 15px 0; background: #030404; color: #e0e0e3; font-size: 1rem; line-height: 1.4; overflow-wrap: anywhere; }
@@ -97,5 +102,5 @@ body.motion-off :is(.features, .mouth-rest, .mouth-wave, .mouth-echo), body.tab-
   body.allow-pulse-motion *:not(.features):not(.mouth-rest):not(.mouth-wave):not(.mouth-echo),
   body, *::before, *::after { animation: none !important; transition: none !important; }
 }
-@media (max-width: 520px) { body { padding: 78px 12px 20px; } .workspace { min-height: 410px; border-radius: 22px; } .presence { padding: 100px 16px 6px; } h1 { font-size: 18px; } .conversation { padding: 0 12px 12px; } .message { max-width: 96%; padding: 11px 12px; } .message.user { max-width: 90%; } }
+@media (max-width: 520px) { body { padding: 72px 12px 20px; } .workspace { min-height: 410px; border-radius: 22px; } .presence { padding: 78px 16px 12px; } h1 { font-size: 18px; } .conversation { padding: 0 12px 12px; } .message { max-width: 96%; padding: 11px 12px; } .message.user { max-width: 90%; } }
 @media (max-height: 560px) and (min-width: 521px) { body { padding-top: 76px; padding-bottom: 24px; } }

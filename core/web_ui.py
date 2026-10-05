@@ -105,7 +105,7 @@ class LocalWebUI:
             if request_id is not None and not isinstance(request_id, str):
                 return 400, {"error": "Некоректний ID підтвердження."}
             self.submission = asyncio.create_task(self._submit(text.strip(), request_id), name="web-submit")
-        elif action in {"stop", "pause", "resume", "microphone", "confirm", "cancel_task"}:
+        elif action in {"stop", "pause", "resume", "microphone", "confirm", "cancel_task", "cancel_search", "cancel_progress"}:
             return await self.app.web_control(action, data)
         else:
             return 400, {"error": "Невідома дія."}

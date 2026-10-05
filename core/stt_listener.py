@@ -117,6 +117,10 @@ class SpeechListener(VoskListener):
         worker_timings = getattr(getattr(self.primary, 'recognizer', None), 'last_timings', {})
         if outcome != 'done':
             metadata, worker_timings = {}, {}  # Never attribute a previous job's metadata to this turn.
+        if timing is not None:
+            timing.values.update(stt_inference=worker_timings.get('whisper.inference'),
+                                 model=metadata.get('model', self.primary.metadata.model),
+                                 device=metadata.get('device', 'n/a'), escalated=metadata.get('escalated'))
         logger.info('stt.latency capture_total_ms=%s speech_end_to_endpoint_ms=%s '
                     'endpoint_to_stt_start_ms=%.1f stt_inference_ms=%s endpoint_to_transcript_ms=%.1f '
                     'speech_end_to_transcript_ms=%s model=%s backend=%s device=%s compute_type=%s '

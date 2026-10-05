@@ -1,5 +1,110 @@
 # Архітектура ValleRa
 
+## Phase 3C: Linux runtime implementation
+
+Linux now uses `services/platform/linux.py`: configured argv application launch,
+desktop-gated `xdg-open`, safe fixed error codes. Headless text responses do not
+queue unsupported TTS. Platform adapter executes authorized requests only;
+Core policy, confirmation, STT profile selection and turn contracts are unchanged.
+`supports()` denotes implementation; `report()` additionally distinguishes
+environment-dependent NOT_AVAILABLE from NOT_IMPLEMENTED. Pi identity uses
+device-tree model, never ARM architecture. No hardware serial/environment dumps.
+Windows implementations remain unchanged. See [Linux runtime](LINUX_RUNTIME.md)
+for capabilities, audit and validation; the historical Phase 3B baseline below
+describes the preceding stub, not the current Linux implementation.
+
+## Phase 3B: minimal Windows / Linux boundary
+
+```text
+Input → RecognitionResult → TurnEnvelope → Dialogue / ActionPolicy / confirmation
+                                                    |
+                                            authorized skill request
+                                                    |
+                                         services/platform resolver
+                                          /                    \
+                            Windows implementations       Linux/ARM facts
+                            existing full behavior        NOT_IMPLEMENTED
+```
+
+`services/platform/resolver.py` exposes frozen `PlatformServices` facts and a
+small operation surface, not a global registry or DI framework. OS is detected
+as Windows/Linux/Unsupported; AMD64/x86_64 normalize to x86_64, ARM64/aarch64 to
+arm64. Linux/arm64 does **not** mean Raspberry Pi. No user OS config is required.
+`supports()` and the report enumerate tts, application_launch, window_control,
+process_control, session_control, power_control, file_open, drive_inventory,
+workplace. IMPLEMENTED means an implementation exists, not live validation.
+Unknown/Linux capabilities are NOT_IMPLEMENTED; hardware_validation is NOT_TESTED.
+
+`PlatformCapabilityUnavailable` is raised before any unsupported execution.
+The router maps it to accepted=false/success=false/unsupported; existing skills
+that already catch execution errors retain their failure handling. No action
+is synthesized or retried to work around missing support. Confirmation and
+ActionPolicy remain upstream, not in the platform adapter.
+
+Windows delegates existing window control and verification to
+`services/windows/window_controller.py`; launch/file-open/drives/session/power
+operations reside in `services/platform/windows.py`. Existing application search,
+index storage, workplace planning/approval/verification are retained; Windows
+discovery is gated and Win32 workplace helpers load only on use. FileService
+keeps path authorization, traversal/copy/move/search; only desktop open and
+Windows volume discovery cross the boundary. Browser URL opening remains the
+existing portable webbrowser operation, not a claim of validated Pi desktop support.
+
+`services/platform/windows_tts.py` contains the moved resident PowerShell
+transport; Windows WAV functions in `services/audio/windows_speech.py` remain
+the single source of truth. Speaker owns its queue, cancellation generation,
+timing and process lifecycle; compatibility forwarding methods preserve existing
+callers. TTS and desktop operations load Windows implementation modules lazily.
+Doctor resolves TTS through the same platform contract; status and diagnostics
+report normalized OS/architecture and fixed capability metadata without secrets.
+
+### Repository audit classification
+
+| Class | Actual areas | Decision |
+|---|---|---|
+| A: neutral Core | DialogueState, TurnEnvelope, ActionPolicy, confirmation, contextual resolution, LLM, memory, web skills | Unchanged; no OS conditions added |
+| B: Windows-specific | PowerShell/System.Speech, winsound, os.startfile, kernel32 drive inventory, user32 lock, shutdown flags | Adapter operations and lazy Windows TTS transport |
+| B: existing Windows services | winreg/Start Menu indexer, COM shortcut resolution, win32gui/process window evidence, pygetwindow | Preserve implementation; gate discovery/workplace, lazy-load window service |
+| C: already portable/sensitive | pathlib/shutil/send2trash, psutil, sounddevice/PCM, subprocess lifecycle, single-instance lock, HTTPS/browser | No virtual filesystem or generic OS wrappers |
+| C: bounded compatibility | console msvcrt guarded import, Windows host-API microphone scoring, hidden subprocess flags in tooling/search | Retained; no capture-policy change or eager Windows dependency |
+| D: future | Linux TTS, app discovery/verification, desktop file-open, windows/session/power, Pi hardware | Explicit NOT_IMPLEMENTED; no xdg-open/aplay placeholders presented as support |
+
+STT quality/balanced/edge still resolve from deployment settings, capabilities
+and model availability in `services/audio/profiles.py`, not from this adapter.
+No model winner or edge hardware validation is implied by ARM detection.
+
+### Deliberate debt / limits
+
+- Windows-specific indexer/workplace internals retain their existing module names;
+  relocation is not required for import safety. Linux application discovery is future work.
+- TTS transport still uses Speaker-owned state and callbacks; the small forwarding
+  seam avoids redesigning stop/generation semantics. Legacy pyttsx3 fallback code
+  remains but is not an advertised Linux backend; unimplemented synthesis is gated.
+- Speaker's existing guarded winsound stop cleanup, console handling and host-API
+  ranking remain small compatibility details, not proof of Linux runtime support.
+- Mocked Linux/ARM imports and unsupported tests are **not** Linux/Pi hardware tests.
+- Installer/dependency packaging and actual audio/session lifecycle on ARM require
+  Phase 3C validation. No Raspberry Pi implementation has started here.
+
+Windows stays first-class and may continue receiving full desktop/RTX features.
+Shared Core features preserve common safety/dialogue contracts; platform features
+may differ without restricting Windows to the least capable target.
+
+## Спільний прогрес завдань
+
+`core/task_progress.py`: `TaskProgress` — проєкція фактичного стану виконавця
+(id, kind, title, status, detail, active, cancel_requested, cancellation,
+started_at, steps). `TaskProgressRegistry.register(kind, snapshot, cancel)`
+підключає сценарій без UI-specific renderer. Snapshot повертає TaskProgress
+або None; cancel повторно перевіряє operational ID у виконавця, не відкочує
+ефекти й не надає дозволів. Реєстр не зберігає історію чи executable arguments.
+
+App реєструє адаптери file_search/workplace й показує active-first/latest
+snapshot у `state.task`. Одна картка показує кроки та результат; скасування
+через `cancel_progress` вимагає kind+task_id. Старі cancellation routes
+залишені для сумісності. Новий виконавець повинен сам надавати фактичні
+етапи й безпечне скасування; контракт не робить усі tools cancellable.
+
 ## Phase 3A.2: Ukrainian STT backends (03.10.2026)
 
 Natural speech: `SpeechListener → acoustic PCM capture → STTBackend →

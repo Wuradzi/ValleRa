@@ -152,6 +152,7 @@ class WhisperRecognizer:
                 initial_prompt=self.settings.stt_whisper_prompt or None,
                 hotwords=self.settings.stt_whisper_hotwords or None,
                 word_timestamps=getattr(self.settings, "benchmark_word_timestamps", True),
+                **getattr(self.settings, 'benchmark_decode_options', {}),
             )
             materialized = list(segments)
             text = " ".join(segment.text.strip() for segment in materialized).strip()
@@ -166,7 +167,7 @@ class WhisperRecognizer:
                 self.last_timings['whisper.inference'] = self.last_timings.get('whisper.inference', 0) + (time.perf_counter() - started) * 1000
             self._diagnose(exc, 'transcribe')
             if self.actual_device == 'cuda' and not self._forced_cpu and device_retry_possible(exc):
-                logger.warning('stt.fallback reason=cuda_runtime_failure target=cpu same_model=true')
+                logger.warning('stt.fallback reason=cuda_runtime_failure target=cpu same_model=true; STT працює у резервному CPU-режимі.')
                 self.last_metadata['fallback'] = 'same_model_cpu'
                 self._forced_cpu, self._model = True, None
                 return self._transcribe_once(pcm, sample_rate)
@@ -221,7 +222,7 @@ class WhisperRecognizer:
                     self._diagnose(exc, 'load', device, compute)
                     if device != 'cuda' or not device_retry_possible(exc):
                         raise
-                    logger.warning('stt.fallback reason=cuda_load_failed target=cpu')
+                    logger.warning('stt.fallback reason=cuda_load_failed target=cpu; STT працює у резервному CPU-режимі.')
                     self.last_metadata['fallback'] = 'same_model_cpu'
                     device, compute, self._forced_cpu = 'cpu', 'int8', True
                     self._model = WhisperModel(source, device=device, compute_type=compute,

@@ -33,10 +33,10 @@
         </svg>
       </div>
       <h1 id="status" role="status">З’єднуємося…</h1>
-      <p id="status-detail" class="sr-only">Підключення до локального асистента.</p>
+      <p id="status-detail" class="status-detail">Підключення до локального асистента.</p>
       <div class="voice-controls">
         <button id="microphone" class="round-button" disabled aria-pressed="false" title="Увімкнути мікрофон"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/><path class="mic-slash" d="M3 3l18 18"/></svg><span class="sr-only">Увімкнути мікрофон</span></button>
-        <button id="stop" class="round-button" disabled title="Зупинити відповідь та озвучення"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="solid" d="M7 5h3v14H7zm7 0h3v14h-3z"/></svg><span class="sr-only">Зупинити відповідь та озвучення</span></button>
+        <button id="stop" class="round-button" disabled title="Зупинити відповідь та озвучення"><svg viewBox="0 0 24 24" aria-hidden="true"><rect class="solid" x="6" y="6" width="12" height="12" rx="2"/></svg><span class="sr-only">Зупинити відповідь та озвучення</span></button>
         <button id="history-toggle" class="round-button" type="button" aria-expanded="false" aria-controls="history-panel" title="Історія розмови"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1 7M4 5v5h5M12 7v5l3 2"/></svg><span class="sr-only">Розгорнути історію</span></button>
       </div>
       <p id="mic-detail" class="mic-detail">Стан мікрофона ще невідомий</p>
@@ -44,7 +44,8 @@
     </section>
     <section class="conversation" aria-label="Розмова">
       <section id="agent-task" class="agent-task" hidden aria-label="Завдання агента">
-        <div class="task-heading"><strong id="task-title">Завдання</strong><span id="task-status" role="status"></span><button id="cancel-task" type="button" disabled>Скасувати кроки</button></div>
+        <div class="task-heading"><strong id="task-title">Завдання</strong><span id="task-status" role="status"></span><button id="cancel-task" type="button" disabled>Скасувати завдання</button></div>
+        <p id="task-cancellation"></p>
         <p id="task-detail"></p><details id="task-details"><summary>План і результати кроків</summary><ol id="task-steps"></ol></details>
       </section>
       <div id="banner" role="status" hidden></div>
@@ -53,6 +54,8 @@
         <div class="messages" id="messages" role="log" aria-label="Повідомлення" aria-live="polite" aria-relevant="additions text" tabindex="0"><div class="empty" id="empty">Тут з’явиться наша розмова.</div></div>
       </section>
       <section id="confirmation" class="confirmation" hidden aria-label="Підтвердження операції"><strong>Потрібне твоє рішення</strong><p id="confirmation-text"></p><div><button id="reject">Скасувати</button><button id="accept">Підтверджую</button></div></section>
+      <button id="jump-latest" type="button" hidden>До останніх повідомлень ↓</button>
+      <p id="draft-note" class="mic-detail" hidden>Редагування голосової репліки · буде надіслано як нове повідомлення</p>
       <form id="composer" class="composer"><label for="message" class="sr-only">Твоє повідомлення</label><textarea id="message" rows="1" maxlength="4000" placeholder="Напиши або продиктуй свою думку…" disabled></textarea><button id="send" type="submit" title="Надіслати повідомлення" aria-label="Надіслати повідомлення" disabled>↑</button></form>
     </section>
     <button class="about-button" id="about" aria-label="Стан сесії та налаштування" title="Стан сесії та налаштування">···</button>

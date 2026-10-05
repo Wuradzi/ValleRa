@@ -8,7 +8,7 @@
     "переіндексуй програми"
   ],
   "platforms": [
-    "windows"
+    "windows", "linux"
   ],
   "enabled": true
 }
