@@ -53,6 +53,7 @@ GROUPS = {
 }
 
 PROBES = {
+    "tts_benchmark": ("Offline backend-neutral TTS harness; fake PCM only, no playback/downloads", "run"),
     "stt_benchmark": ("Offline WAV backend/profile benchmark; без LLM/мережі/мікрофона", "run"),
     "workplace": ("Читання профілю, індексу й вікон Windows; без запуску програм/мережі/мікрофона", "run"),
     "tts": ("Живий Windows TTS: PCM, зупинка, повторний запуск; без API/мікрофона", "run"),
@@ -73,7 +74,11 @@ def probe_options(name, argv):
     """Parse centrally, before importing optional or native dependencies."""
     parser = argparse.ArgumentParser(prog=f"tester.py --probe {name} --",
                                      description=PROBES[name][0])
-    if name == 'stt_benchmark':
+    if name == 'tts_benchmark':
+        parser.add_argument('--fake-mode', choices=('success', 'failure', 'malformed', 'cancel'), default='success')
+        parser.add_argument('--cancellation', action='store_true')
+        parser.add_argument('--variant-timeout', type=positive_timeout, default=30)
+    elif name == 'stt_benchmark':
         parser.add_argument('--corpus', type=Path, required=True)
         parser.add_argument('--matrix', type=Path)
         parser.add_argument('--candidates', nargs='+')

@@ -1,5 +1,13 @@
 # Перевірка ValleRa перед checkpoint
 
+## Phase 3D.1: edge voice measurement infrastructure
+
+Run offline fixture coverage with `python tester.py --all --filter benchmark --verbose`.
+The new `tts_benchmark` probe measures fake silent PCM only, without playback,
+models or downloads. Contract, metrics, privacy redaction and limitations are
+documented in [STT backends](STT_BACKENDS.md#phase-3d1--benchmark-instrumentation-2026-10-06).
+No real Pi STT/TTS winner has been selected; production voice defaults are unchanged.
+
 ## Команди
 
 Запускайте з кореня проєкту, у встановленому virtualenv.

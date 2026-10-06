@@ -1,5 +1,399 @@
 # Ukrainian STT backends — Phase 3A.2
 
+## Phase 3D.1 — benchmark instrumentation (2026-10-06)
+
+Infrastructure only: no model selection, installation, production default
+changes or Linux TTS enablement. Real Pi benchmarks: NOT_RUN.
+STT preserves load/first-inference times, row latency/confidence/WER/CER,
+aggregate average/median/p95/RTF and lexical semantic accuracy metrics.
+Candidates add platform, architecture, Python version, sample_rates,
+corpus_duration_seconds, status and existing backend/model/device/compute
+metadata. Requested settings are not proof of successful model loading.
+
+Shared benchmark-only resource fields (RAM/RSS/swap are MiB despite the
+backward-compatible `_mb` spelling):
+
+| Fields | Meaning |
+| --- | --- |
+| available_before_load_mb, available_ram_mb, min_available_inference_mb | System available RAM before prepare, latest sample, inference minimum |
+| rss_mb, peak_rss_mb, samples | Candidate process RSS, sampled peak, sample count |
+| cpu_seconds, cpu_one_core_percent | Process user+system CPU, average utilization; 100% = one core |
+| swap_used_mb, swap_used_delta_mb | System-wide swap usage and signed change |
+| swap_in_delta_bytes, swap_out_delta_bytes | System-wide swap I/O deltas |
+| temperature_c, peak_temperature_c | Readable thermal-zone-0 temperature and maximum |
+| throttling_flags, throttling_flags_seen | Latest firmware flags and OR of observations |
+| peak_vram_mb, vram_note | Existing optional NVML device-0 total usage, not process-exclusive |
+
+Sampling targets 50ms; atomic checkpoints every ten samples and at load/finish
+allow partial recovery on timeout/crash (resources_partial). A crash before the
+first checkpoint may yield no data. Sampling overhead is included; between-sample
+peaks may be missed. RSS excludes child processes and combined Core+STT+TTS
+residency. System RAM/swap include other processes. Unavailable metrics are null,
+not zero. Windows disabled performance counters are tolerated. Linux reads only
+bounded numeric thermal/firmware sysfs files, without sudo or subprocess tools.
+Kernel layouts may omit these files, particularly firmware throttling. No serial,
+network inventory or environment collection. Pi sensors/overhead need validation.
+
+Numeric metrics are retained; transcripts/references/arbitrary error text become
+`<omitted>`, unknown model paths/candidate IDs/entity labels are hashed. This
+intentionally limits old free-text comparison output for privacy; WER/CER use
+original strings before redaction. Reports exclude home paths/usernames/arbitrary
+model messages. Tester diagnostic logs remain local/internal: review before sharing.
+
+### Backend-neutral TTS harness
+
+`testing/probes/tts_benchmark.py` accepts an adapter with metadata (backend,
+model, device, compute_type), prepare()->(ok,detail),
+synthesize(text,output_path,cancellation_event), close(), and optional
+supports_cancellation. Successful synthesis writes a valid WAV and returns its
+path; cooperative cancellation returns None. No Windows probe reuse or playback.
+The CLI currently registers ONLY a fake backend producing silent PCM fixtures.
+
+```text
+python tester.py --probe tts_benchmark --allow-live -- --fake-mode success
+python tester.py --probe tts_benchmark --allow-live -- --fake-mode cancel --cancellation
+```
+
+--allow-live is the existing tester probe gate, NOT a live voice test here.
+Other fixture modes: failure/malformed. --variant-timeout defaults to 30 seconds.
+The isolated CLI worker bounds hangs; direct adapter calls are synchronous and
+depend on the backend returning. Process termination is timeout, not successful
+cooperative cancellation. Checkpoints preserve partial resource metrics.
+
+TTS metrics: load_ms, last_synthesis_attempt_ms; per-WAV synthesis_ms,
+audio_seconds, sample_rate, synthesis_rtf; total generated corpus_duration_seconds,
+sample_rates; shared resources; cancellation/cancellation_ms, status/reason/
+failure_type and platform metadata. first_playable_audio_ms stays null (unmeasured).
+human_quality_evaluation=NOT_TESTED is not an automated quality score.
+Fixture timings do not predict real synthesis speed or voice quality.
+
+## Phase 3D.0 readiness audit — 2026-10-06
+
+Audit/design only. No runtime changes, installs, downloads, model selection or
+new hardware benchmarks. Phase 3C.1 edits remain in the working tree unchanged.
+Labels: IMPLEMENTED = code exists; TESTED_WINDOWS = local tests;
+MOCK_TESTED = simulated hardware/dependencies; LIVE_PI = user's prior hardware
+report, not reproduced here; NOT_TESTED / NOT_IMPLEMENTED retain literal meaning.
+
+### Evidence and primary constraints
+
+LIVE_PI (user report, event date unspecified): Python3.13.5, Linux/aarch64,
+positive Pi detection, 905MB total/~550–560MB available RAM,4 cores,no CUDA;
+USB mic44100Hz, live audio-test speech_detected and clipping detection work;
+normal capture did not clip. Output enumerated, playback NOT_TESTED. Confirmation
+Vosk model cached (not proof of recognition quality). Core/text/vault/Gemini/
+shutdown validated. Natural STT/E2E NOT_VALIDATED; Linux TTS NOT_IMPLEMENTED.
+
+### 1. Actual unrestricted / confirmation paths
+
+`ValleRaApp._voice_loop → _listen_for_turn` (`core/app.py`) calls
+`SpeechListener.listen_once(15.0, None)` (`core/stt_listener.py`) in a thread.
+Listener selects device/rate via inherited `VoskListener._input_candidates`,
+then `services/audio/pcm_capture.capture_pcm → AcousticEndpoint` captures PCM16
+mono. No Vosk decoder is constructed for unrestricted primary capture.
+`resolve_profile → create_backend` ran during listener construction;
+`_prepare_stt → listener.prepare` optionally preloads in background.
+`_recognize_capture → RefinementWait.run → primary.transcribe` returns
+`RecognitionResult`; empty/low/nonfinite confidence, unreliable or failed job
+marks failed; optional configured Vosk fallback stays unreliable. Capture
+truncation and possible_fragment propagate to fragmented/incomplete. App
+`_enqueue_command` creates `TurnEnvelope`, `_command_loop` claims DispatchGuard
+then `CommandProcessor.process`; microphone epoch/cancellation remain guards.
+RecognitionPolicy.action_eligible is the compatibility `not fragmented`, NOT
+permission to execute; ActionPolicy/direct request/confirmation still apply.
+
+Confirmation: app snapshots request_id, calls `_listen_for_turn(timeout,
+ConfirmationService.GRAMMAR)` → `SpeechListener.listen_once` delegates to
+`VoskListener.listen_once/_listen_with_device`; builds a fresh KaldiRecognizer
+with `ConfirmationService.recognition_grammar(model)` (known unknown-token
+variant included), native endpoint, 80ms energy gate. No Whisper refinement
+with grammar. Actual text/confidence → `_decision`/`submit(...,request_id)`;
+unknown/low confidence fail closed, stale replies rejected. Cached Vosk Model
+is shared within listener, but grammar/decoder state is per capture. Separation
+is IMPLEMENTED/MOCK_TESTED and must remain; natural Vosk baseline is offline only.
+
+### 2. Sample-rate facts and coverage
+
+`_input_candidates` reads each input's default_samplerate; only nonpositive
+rate falls back to config stt.sample_rate=16000. Thus reported Pi44100 implies
+RawInputStream requests44100, NOT16000; capture carries that rate into backend.
+No explicit application resampler. No claim that PortAudio converts44100→16000:
+the code requests the reported rate, and actual host/device negotiation is not
+instrumented. PortAudioError tries another candidate; no automatic16000 retry
+for the same device. STREAM default rate metadata is not measured clock proof.
+
+- Vosk: KaldiRecognizer(model, actual_rate), raw PCM. Resampling, if needed,
+  belongs to native recognizer. Cached model does not validate44100 inference.
+- Faster-whisper: `_wav_buffer` writes actual rate into WAV header; installed
+  faster_whisper1.2.1 `transcribe.py/decode_audio` reads file-like audio and
+  `audio.py` uses PyAV AudioResampler at feature-extractor rate (16000).
+  This is inspected local dependency code, NOT Python3.13/Pi validation.
+- Sherpa/Moonshine: `accept_waveform(actual_rate, float32_PCM)`; no app-level
+  conversion. Native44100 handling must be verified against installed Pi runtime.
+  Do not silently relabel44100 bytes as16000; no such relabelling found here.
+
+Tests in test_audio_blocks cover16000/22050/48000 energy/timing; primary fixtures
+mostly16000. No complete fake44100-device→backend/resampler→result regression
+found. Add that focused check before live44100 inference in Phase3D. No demonstrated
+rate correctness blocker from this audit; backend44100 acceptance remains a gate.
+
+### 3. Acoustic endpoint (unchanged)
+
+PCM callbacks capped at100ms (min(config audio_block_ms,100)); RMS analysis20ms.
+Activity threshold=max(.0025,min(.08,noise_threshold*.75)); >=250ms cumulative
+active audio establishes speech. Span<1s uses short700ms silence;1–3s uses
+configured silence (0 becomes1200ms);>=3s uses max(normal,long1600ms).
+These are code/default values, not a claim about private Pi config. App onset
+budget15s; after speech detection deadline backdated to onset, max15s speech,
+absolute bound30s including initial wait. Retain300ms pre-roll, trim leading
+silence, no-speech returns empty. Bounded callback queue256; any callback status
+or queue overflow marks capture_truncated. Endpoint waits until queued blocks
+drained. Poll cancellation every<=50ms plus processing; flags suppress dispatch.
+AcousticEndpoint is backend-independent. Runtime PCM capture has no dedicated
+clipping metric; health `audio_probe` computes peak/RMS/clipping separately.
+Reuse capture/endpoint unchanged; no threshold tuning in this audit.
+
+### 4. Backend / residency inventory
+
+| Backend | Status / loading | Rate, confidence, lifetime and limitations |
+|---|---|---|
+| Vosk | IMPLEMENTED_RUNTIME constrained and explicit low-resource; local Model path, no download | Fresh KaldiRecognizer per transcribe, SetWords mean word confidence; offline unrestricted has no grammar. Model cached with load lock, close drops reference; no native timeout/cancel mid-call. Result alone is not ACTION approval. |
+| faster-whisper | IMPLEMENTED_RUNTIME; local files enforced through primary_settings/create_backend; Windows quality unchanged | WAV/PyAV rate path; forced uk/transcribe, word probability or exp(avg_logprob) combined with speech/language factors, not calibrated safety probability. Resident spawned worker, serialized pipe; model switches drop previous reference (no simultaneous intended model slots). Benchmark process=False loads inside isolated candidate. |
+| sherpa-onnx | IMPLEMENTED_RUNTIME experimental, NOT_VERIFIED_ON_PI | Local `models/<profile.model>` or absolute directory; CPU threads=max(1,stt_whisper_cpu_threads), default2. Native call within locked daemon-drain thread in Core process. Confidence0 plus unreliable/incomplete/fragmented=True; not ready for trusted conversation/ACTION even if text exists. |
+| Moonshine v2 ONNX | BENCHMARK_ONLY (`testing/probes/moonshine_candidate.py`) | Local encoder_model.ort, decoder_model_merged.ort, tokens.txt; sherpa OfflineRecognizer.from_moonshine_v2 CPU. No forced-language argument/independent Ukrainian model validation; label/path alone is not proof. Confidence0/unreliable; no production registration or timeout inside adapter. |
+
+No new candidates proposed. Existing Windows Speech/RHVoice instructions are not
+a Linux TTS adapter. No implemented Pi TTS candidate found. ONNX runtimes/libraries
+and faster-whisper native dependency compatibility on ARM64/Python3.13 remain
+NEEDS_LIVE_VERIFICATION, regardless of platform-neutral adapter Python code.
+
+Sherpa details: requirements-edge.txt `sherpa-onnx>=1.12`; int8 expects exactly
+one `*-encoder.int8.onnx`, `*-decoder.int8.onnx`, `*-tokens.txt`; float32 uses
+`*-encoder.onnx`/`*-decoder.onnx` (ambiguous matches rejected). Empty files and
+`.en-` names rejected. from_whisper(language='uk',task='transcribe',provider='cpu');
+hotwords/initial_prompt rejected explicitly. Model stays resident; close sets
+event and releases only if native job no longer owns lock. Preparation exceptions,
+including Python MemoryError, return false/detail; inference exceptions go to
+drain failure. Native crash/OS OOM can terminate Core; no isolation/RAM guard.
+No package/wheel check has been made on real Python3.13.5/ARM64 in this audit.
+
+### 5. Timeout is not native cancellation
+
+RefinementWait allows one active drain job, soft=min(4000,primary_timeout_ms),
+hard=primary_timeout_ms(default60000). Timeout bounds waiting, not CPU/RAM use;
+late result remains private mailbox, no dispatch; next request returns busy.
+Sherpa prepare preload is outside this wait and no hard kill exists. Close can
+defer model destruction until decoding returns. Faster-whisper worker can be
+terminated/reaped on shutdown/error; ordinary externally budgeted transcription
+drains without the pipe's120s limit. Do not kill native thread or permit concurrent
+jobs to make a UI timeout look faster. Optional Vosk fallback runs synchronously
+after primary failure and has no extra hard budget; still ACTION-ineligible.
+
+### 6. Edge selection and memory
+
+`default_profiles()['edge']` hardcodes sherpa-onnx-whisper-small/int8/CPU.
+resolve_profile auto ARM→edge; performance raspberry_pi existing alias sets edge.
+target_ram_mb=2048 and target_rtf=1.0 are reporting targets, NOT hard runtime
+guards or edge selection criteria. Quality auto has separate fixed RAM/VRAM
+requirements, not these target fields.905MB Pi cannot be presumed suitable for
+2048MB target. No OOM avoidance based on target_ram_mb; don't preload this candidate
+just because profile resolves successfully. Initial run/model viability gate first.
+
+Confirmation Vosk weights become resident lazily; one listener VoskBackend shares
+model with its fallback, not recognizer grammar. Benchmark new backend/process
+loads another Model; running alongside Core duplicates residency, unknown amount.
+Keep Core stopped for isolated candidate tests. Core/NumPy/PCM (up to ~30s at
+44100), queue/copies, float32 conversion, confirmation model, primary model and
+future TTS may coexist. Default background prepare may load STT/TTS concurrently.
+Whisper process close unloads; in-process Whisper close is effectively absent
+(isolated benchmark exit frees it). Vosk drops reference; Sherpa deferred close.
+Future simplest options: retain only candidate proven to fit, lazy TTS, sequential
+STT/TTS load/unload if measured necessary. No scheduler designed/implemented.
+
+### 7. Offline benchmark readiness
+
+`tester.py --probe stt_benchmark` → `testing/probes/stt_benchmark.py`: sequential
+spawned candidate processes, local files, no LLM correction/downloads. Each candidate
+prepare, first inference excluded from warm stats, then corpus. WER/CER, mean,
+median,p95,weighted RTF, per-row reference/transcript/confidence, load_ms,
+first_inference_ms, metadata/device/compute, versions, completed/failed/timeout/
+NOT_TESTED exist. completed means measurement finished, not usable recognition.
+Warmup result validity is specifically checked for Whisper, not every candidate;
+crashed worker reports worker_exit, not proven OOM. Overall exit0 requires only
+ONE completed variant; inspect all variants, not exit code alone.
+
+Resources: isolated process sampled RSS max every50ms including load; no RSS
+series/baseline/system-available/CPU/swap/temp in this probe. Hardware total RAM
+available. Older `testing/probes/whisper.ResourceSampler` has min system available
+RAM, worker RSS/private every200ms, but lives in a synthetic Windows-TTS-oriented
+comparison, not a general Pi baseline. Reuse measurement logic, not that workflow.
+RSS is sampled, not guaranteed true peak; OS OOM may lose the child report.
+
+Private corpus inspected headers only:24/24 confirmed, non-synthetic WAV,
+44100Hz monoPCM16,107.46s total. Same files/corpus.json can be transferred privately
+unchanged; reader verifies SHA256 and confirmed references,1..240 samples allowed.
+No audio/transcripts added to Git. Reader loads entire PCM corpus in parent and
+candidate; account for that overhead, not just model weights. No subset-count CLI;
+derive separate local manifests for1 and3–5 files with unchanged references/hashes.
+Never overwrite canonical24 manifest. Matrices: stt_matrix.json and
+stt_latency_matrix.json; use explicit candidate filters, NOT the default multi-model list.
+
+Minimal Phase3D measurement extension: same psutil sampler captures baseline/peak
+RSS (candidate and orchestration context), available RAM before/load/min-inference,
+CPU-time deltas with wall time (state one-core vs machine normalization), swap
+sin/sout deltas, numeric temp/throttling if locally available with bounded read.
+Unavailable sensors=null/NOT_TESTED. No serial/MAC/env/proc dumps. Store periodic
+small parent-visible numeric samples so a killed child does not lose all evidence.
+Swapping/thermal throttling confound latency; flag runs, don't rank contaminated
+results as clean wins. No monitoring framework or implementation in this audit.
+
+### 8. TTS architecture / minimal future contract
+
+LLM/processor response → SpeechBuffer → Speaker.say(console/UI) → bounded queue8
+SpeechRequest(timing,generation) → _worker/_speak_sync/_speak_with_output → platform.
+Windows default output uses resident PowerShell/System.Speech direct synthesis/
+playback (NO per-phrase WAV). Selected output uses cached WAV → RawOutputStream;
+platform winsound fallback. windows_tts owns transport; Speaker owns generation,
+queue, cancellation, timing/UI. stop increments generation, drains queue,
+terminates/reaps child, clears playback; stale requests cannot play.
+TTSCache disk key voice/rate/text, no engine identifier or size eviction.
+Linux Speaker.say currently returns after console/UI (no audio queue);
+probe reports NOT_AVAILABLE with TTS NOT_IMPLEMENTED detail. Simply enabling
+supports('tts') would still route through Windows-named synthesis branches:
+must add a narrow Linux adapter selection, not just flip capability flag.
+
+Small proposed contract, not code: prepare/status; synthesize(text, voice/rate,
+destination, cancellation) produces validated finite PCM WAV with explicit rate/
+channels/sample width; close/stop with clear timeout and resource ownership.
+Start WAV-first unless evidence justifies streaming. Optional unsupported voice
+is an explicit error/fallback report. Shared Speaker owns generation/queue;
+discard late audio, never dispatch from backend callback. Linux playback must
+support default sounddevice device=None as well as selected device without
+falling into Windows Speech/winsound. Cache namespace must separate engine/model/
+voice so old audio cannot masquerade as new engine. Keep Windows path untouched.
+
+Existing tester probe `tts` is Windows-only GetProcessTimes + resident SAPI
+PCM/pulse/stop/restart, audible; NOT a Linux candidate benchmark. Health
+tts_self_test measures one Windows WAV/voice/duration, not multi-engine latency.
+Do not reuse either as proof of Pi playback. Proposed separate backend-neutral
+probe via tester.py: isolated candidate, fixed neutral Ukrainian sentence IDs,
+cold init, first/warm synthesis, WAV validity/audio seconds, RTF(synthesis/audio),
+first playable chunk only when available (else null), CPU/RSS/available RAM,
+errors/repeated stability and cancellation. Human intelligibility/pronunciation/
+naturalness comments stored separately with evaluator/date; no fake quality PASS.
+No candidate or harness implemented during audit.
+
+### 9. Timing coverage
+
+CapturedAudio carries capture/speech-start/end-estimate/endpoint/return timestamps;
+stt.capture logs them, speech onset not carried in TurnTiming. Primary span,
+endpoint_to_stt_start and recognition_ready exist; whisper.inference worker detail
+exists, equivalent native sherpa stage detail absent. App marks dispatch;
+LLM request_including_callbacks, llm.first_text/provider first_text exist;
+request start logged as span, not always a separate turn-relative event.
+Speaker marks first_phrase,tts_start,tts_submit; queue/synthesis/playback durations
+exist. tts_submit/speak_call/_set_playback are SOFTWARE submission, not acoustic
+first sound. TurnTiming.finish total ends at processor completion, not final audio;
+no universal end-of-response acoustic metric. Actual first sound requires local
+loopback/physical measurement; future backend first PCM write is only a proxy.
+Keep optional/perf-disabled behavior; don't mislabel software timestamps as sound.
+
+### 10. Python3.13/ARM64 dependency inventory (no installations)
+
+| Dependency | Classification / evidence |
+|---|---|
+| vosk>=0.3.45 | Python wrapper + NATIVE_EXTENSION/shared lib (CFFI); cached weights and successful Core import imply package availability from user run, not unrestricted inference44100 validation. |
+| sounddevice>=0.5 + CFFI/PortAudio | Python wrapper + native runtime; CURRENTLY_INSTALLED_ON_PI inferred from reported live audio-test; playback still NOT_TESTED. |
+| numpy>=2.0 | NATIVE_EXTENSION; exercised by Pi audio-test, exact installed version UNKNOWN. |
+| psutil>=6.0 | NATIVE_EXTENSION; Pi Doctor numeric resources exercised. |
+| cryptography>=43.0 | NATIVE_EXTENSION/transitive build needs; successful Pi vault supports current installed build, exact version UNKNOWN. |
+| faster-whisper>=1.2.1 | Python orchestration with native CTranslate2, PyAV, tokenizers, ONNX Runtime VAD; ARM64/Python3.13 wheels/runtime NEEDS_LIVE_VERIFICATION. Windows installed build is not evidence. |
+| sherpa-onnx>=1.12 | NATIVE_EXTENSION/ONNX runtime build; NOT_VERIFIED_ON_PI; no wheel availability claim. Moonshine needs specific API, minimum version alone insufficient proof. |
+| google-genai/httpx/dotenv | Python-level orchestration; transitive native dependencies possible (e.g. pydantic-core). Live Pi Gemini validates current combination only. |
+| rapidfuzz | Native-accelerated package; current Core import is not benchmark evidence; exact build UNKNOWN. |
+| pywin32/pyttsx3/PyGetWindow/pyautogui | Windows-marked requirements or Windows usage; not Pi voice requirements. |
+
+Inspect actual Pi versions/module imports and wheel/platform tags before selecting
+a candidate. No speculative pins/downgrade of Python; no blanket3.13 support claim.
+
+### 11. Minimal Phase3D implementation map / protected boundary
+
+| Module | Current role → smallest conditional change | Pi validation |
+|---|---|---|
+| testing/probes/stt_benchmark.py; reusable ResourceSampler logic | Candidate measurement → system RAM/CPU/swap/temp, parent-visible crash evidence, uniform warmup validation | Required |
+| tests/test_audio_backends.py / audio blocks | Mostly16k fixtures →44100 device→backend contract tests | Mocks then real |
+| testing matrices | Candidate lists → one explicitly provisioned candidate per experiment; no production switch | Required |
+| testing/probes/new TTS probe + tester.py registration | Windows-only probe → neutral isolated WAV benchmark, fake backend tests | Required |
+| services/platform/linux.py,resolver.py; small Linux TTS adapter | No TTS → chosen measured candidate prepare/synthesize/stop/close/playback | Required |
+| core/speak.py; core/tts_cache.py | Windows-bound synthesis branch/cache → narrow platform branch and engine-aware cache; preserve shared queue/generation | Windows + Pi |
+| services/audio/backends.py/sherpa_backend.py | Existing adapters → only proven compatibility/lifecycle correction if experiment requires; no fabricated confidence | Required |
+| config.py / profiles.py | Current candidates/defaults → only after evidence; memory target not a promise | Required |
+
+Avoid changing core/models.py TurnEnvelope/RecognitionResult, action_policy,
+confirmation, natural-turn/direct-request checks, dialogue/processor routing,
+dispatch guard, memory/security/SecretStore, LLM/fallback, diagnostics privacy,
+Windows Speech/windows_tts, primary Windows quality, endpoint tuning/download
+policy. Voice capture should change only for a demonstrated rate bug. Do not
+set confidence=1 for ONNX, clear unreliable to enable actions, share grammar
+decoder across turns, kill active native threads, introduce auto-download or
+headless GUI dependency. Any future safety-policy need is a separate reviewed task.
+
+### 12. Exact staged Pi experiment plan (future, not run)
+
+A. Stop Core/other candidates. Record numeric resources, Python3.13.5, package
+versions, config snapshot without secrets. `python install.py --profile raspberry_pi
+--check`; `python main.py --doctor`. Provision ONE chosen candidate explicitly,
+verify imports/API/local weights/rate support; no production defaults changed.
+Dependency failure means NOT_TESTED, stop candidate, do not compile/install blindly.
+
+B. One private confirmed WAV in separate1-sample corpus. First reuse already
+cached Vosk as BASELINE ONLY; one cold load/first inference and warm pass. Check
+nonempty output, actual44100 rate, numeric memory. Stop on OOM/crash or incompatible
+runtime; don't retry indefinitely. TTS equivalent is one neutral sentence, WAV
+validation then explicit playback (output enumeration alone insufficient).
+
+C. Separate3–5-sample corpus, short/long/pause cases, one candidate. Check WER/CER,
+latency/RTF, RAM and swapping/throttling before24 files. Stop repeated crashes,
+sustained memory collapse/swap growth or clearly unusable latency; existing
+target_rtf=1 is a reporting goal, NOT sufficient winner threshold. Do not invent
+new numeric acceptance thresholds without user/hardware evidence.
+
+D. Full unchanged24 WAV only for surviving candidates, sequential fresh processes.
+Existing command (replace private directory):
+
+```sh
+python tester.py --probe stt_benchmark --allow-live --timeout 700 -- --corpus /private/corpus24 --matrix testing/stt_matrix.json --candidates vosk --device cpu --variant-timeout 600
+```
+
+Same command with corpus1/corpus-small for B/C;600s is existing candidate cap,
+700s outer harness deadline avoids its default300s killing the600s worker first.
+These are execution limits, not winner thresholds. Do not run entire matrix.
+Wait for worker exit before next candidate; compare cold/warm separately. Reports
+contain transcripts and stay private. Future TTS probe CLI is NOT_IMPLEMENTED;
+specify it when the neutral harness is added, not a fictitious runnable command.
+
+E. Surviving STT through actual microphone44100 + unchanged endpoint; evaluate
+recognition/repeat behavior, confirmation yes/no/stale/cancel, software timings.
+Keep unknown-confidence candidates offline or fail-closed; no tools used as ASR
+accuracy tests. Explicit short playback test and human Ukrainian voice assessment.
+
+F. Run Core + confirmation model + candidate STT + candidate TTS; measure total
+available RAM, all process residency, swap and thermal condition over repeated
+turns, cancellation/shutdown, late results/no duplicate response, headless/text-only.
+If coexistence fails, test sequential lazy load/unload rather than weakening
+safety or masking swapping. No combined-stack readiness until live evidence.
+
+### Audit validation
+
+Existing `tester.py --module stt voice tts performance --verbose`:197/197 PASS
+on Windows (mock/offline unit tests, not acoustic or Pi validation).
+`tester.py --all --filter stt_latency_benchmark --verbose`:4/4 PASS, fake candidate
+validation only (no inference benchmark).
+No new test or harness code required for this documentation-only audit. Header inventory was
+read-only, not recognition. Full suite/release/Doctor not rerun for documentation;
+previous Phase3C.1 results are historical, not this audit's results.
+
+
 Natural speech uses `SpeechListener → capture_pcm → selected STTBackend`
 without constructing a Vosk decoder or waiting for Vosk text. Backend output is
 the existing `RecognitionResult`; `TurnEnvelope` and dialogue/action policy are

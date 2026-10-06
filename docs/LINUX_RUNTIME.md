@@ -1,10 +1,32 @@
 # Phase 3C — Linux / ARM64 runtime
 
-Implemented, automated-tested with mocks on Windows. Linux/WSL/Pi live runtime
-NOT_TESTED. This is a hardware-validation candidate, not a validated Pi voice stack.
-No model selection/latency/quality claims for Pi. Windows remains first-class.
+## Phase 3C.1 findings — recorded 2026-10-06
 
-## Validation record — 2026-10-05
+User-reported first real Pi run: Core/text, setup/vault, USB microphone
+enumeration/calibration, audio-output enumeration and live Gemini conversation
+succeeded; graceful Ctrl+C after about 1157s. Linux/aarch64, positive Pi detection,
+4 CPUs, about 905MB RAM (550–560MB available), no CUDA. Event date not supplied.
+This is prior user hardware evidence, not a new run by this patch or full E2E voice
+validation: voice_turns=0, natural STT NOT_VALIDATED, Linux TTS NOT_IMPLEMENTED.
+
+Two local corrections: SkillLoader now skips unsupported manifests before Python
+import (no pyautogui dependency on Pi); fresh positively detected Pi config uses
+performance.profile=raspberry_pi. Generic ARM64 remains fast. Existing config
+merge/migration retains prior defaults and explicit user profile, even fast on Pi.
+Installer profile still controls installation, not persistence. Fresh setup wizard
+saves the hardware-aware default; CLI --profile is still a run-only override.
+For an existing Pi config, explicitly edit performance.profile or use
+`python main.py --text-only --profile raspberry_pi`; this patch does not rewrite it.
+No STT model/profile tables, TTS, confirmation or ActionPolicy changes.
+The current edge target_ram_mb=2048 exceeds this Pi's RAM: suitability belongs
+to Phase 3D; no installation/download/benchmark of speech models here.
+
+Windows remains first-class. WSL and a new live Pi run after these fixes are NOT_TESTED.
+Phase 3C.1 checks on Windows: targeted10/10, full730/730, release9/9,
+Ruff/diff PASS; doctor12PASS/8WARN/0FAIL with successful Windows Speech synthesis.
+No commit/push in Phase 3C.1.
+
+## Historical Phase 3C validation record — 2026-10-05
 
 - Targeted `tester.py --all --filter LinuxRuntimeTests --verbose`: 14/14 PASS.
 - Full `tester.py --all --verbose`: 720/720 PASS (Windows project `.venv`).
@@ -14,7 +36,8 @@ No model selection/latency/quality claims for Pi. Windows remains first-class.
 - Ruff and git diff --check PASS. Mocked Linux/ARM + fixture Pi identity only;
   fresh-process text-Core construction with unavailable sounddevice passed.
 - WSL executable exists, but no WSL distro/runtime validation was performed.
-- No commit/push. No live API, audio capture, model downloads or OS modifications.
+- Phase 3C was subsequently committed/pushed as 0d2b422. Its automated validation
+  did not make live API calls, capture audio, download models or modify the OS.
 
 LINUX / ARM64 RUNTIME: READY FOR HARDWARE VALIDATION
 

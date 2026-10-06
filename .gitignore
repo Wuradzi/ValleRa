@@ -62,3 +62,7 @@ htmlcov/
 !/docs/PUBLICATION.md
 !/docs/DEVELOPER_VALIDATION.md
 !/docs/LINUX_RUNTIME.md
+!/docs/WINDOWS_SETUP.md
+!/docs/USER_GUIDE.md
+!/docs/CONFIGURATION.md
+!/docs/TESTING.md

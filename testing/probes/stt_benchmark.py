@@ -4,15 +4,15 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import multiprocessing
-import os
 import math
 import statistics
 from pathlib import Path
-import threading
+import tempfile
 import time
 from uuid import uuid4
 
 from testing.probes.whisper import load_audio, score, normalize, edit_distance
+from testing.probes.voice_resources import VoiceResources, environment, public_report, read_checkpoint
 
 
 def read_samples(directory):
@@ -92,44 +92,10 @@ def aggregate(rows):
             'realtime_factor': sum(r['latency_ms'] for r in rows) / 1000 / sum(r['audio_seconds'] for r in rows)}
 
 
-def _variant(connection, directory, candidate, device):
+def _variant(connection, directory, candidate, device, checkpoint=None):
     backend = None
-    stop = threading.Event()
-    resources = {'peak_rss_mb': None, 'peak_vram_mb': None,
-                 'vram_note': 'not sampled; CPU has no VRAM, CUDA requires an external NVML sampler',
-                 'rss_note': 'sampled whole isolated process RSS every 50ms, including model load'}
-
-    def sample_ram():
-        nvml = None
-        try:
-            import psutil
-            process = psutil.Process(os.getpid())
-            try:
-                import pynvml
-                pynvml.nvmlInit()
-                nvml = pynvml
-                gpu = nvml.nvmlDeviceGetHandleByIndex(0)
-                resources['vram_note'] = 'sampled total device 0 usage (includes other processes), every 50ms'
-            except Exception:
-                nvml = None
-            while not stop.is_set():
-                resources['peak_rss_mb'] = max(resources['peak_rss_mb'] or 0, process.memory_info().rss / 1048576)
-                if nvml is not None:
-                    try:
-                        used = nvml.nvmlDeviceGetMemoryInfo(gpu).used / 1048576
-                        resources['peak_vram_mb'] = max(resources['peak_vram_mb'] or 0, used)
-                    except Exception:
-                        pass
-                stop.wait(.05)
-        except (ImportError, OSError):
-            pass
-        finally:
-            if nvml is not None:
-                nvml.nvmlShutdown()
-
-    monitor = threading.Thread(target=sample_ram, daemon=True)
-    monitor.start()
-    report = {'candidate': candidate, 'requested_model': candidate['model'], 'rows': []}
+    monitor = VoiceResources(checkpoint).start()
+    report = {'candidate': candidate, 'requested_model': candidate['model'], 'rows': [], **environment()}
     try:
         from config import load_settings
         from services.audio.backends import create_backend
@@ -151,7 +117,8 @@ def _variant(connection, directory, candidate, device):
             report.update(status='NOT_TESTED', reason='cuda_unavailable')
             return
         samples, digest, synthetic = read_samples(directory)
-        report.update(corpus_sha256=digest, synthetic=synthetic)
+        report.update(corpus_sha256=digest, synthetic=synthetic,
+                      sample_rates=sorted({s[2] for s in samples}), corpus_duration_seconds=sum(s[3] for s in samples))
         if profile.backend == 'moonshine-onnx':
             from testing.probes.moonshine_candidate import MoonshineCandidate
             backend = MoonshineCandidate(settings.paths.project_root / profile.model, settings.stt_whisper_cpu_threads)
@@ -161,9 +128,14 @@ def _variant(connection, directory, candidate, device):
             backend.recognizer.settings.benchmark_word_timestamps = candidate.get('word_timestamps', True)
             backend.recognizer.settings.benchmark_decode_options = (
                 {'temperature': 0.0, 'best_of': 1} if candidate.get('single_pass', False) else {})
+        monitor.before_load()
         started = time.perf_counter()
-        ok, detail = backend.prepare()
-        report.update(load_ms=(time.perf_counter() - started) * 1000, metadata=asdict(backend.metadata))
+        report['metadata'] = asdict(backend.metadata)
+        try:
+            ok, detail = backend.prepare()
+        finally:
+            report['load_ms'] = (time.perf_counter() - started) * 1000
+        report['metadata'] = asdict(backend.metadata)
         if not ok:
             unavailable = (backend.recognizer.preparation_unavailable if profile.backend == 'faster-whisper'
                            else any(token in detail for token in ('missing', 'FileNotFoundError', 'ModuleNotFoundError')))
@@ -177,6 +149,7 @@ def _variant(connection, directory, candidate, device):
                     raise RuntimeError('CUDA load fell back to CPU; not a GPU benchmark')
             # A real first inference, excluded from the warm distribution, catches
             # CUDA errors that weight loading alone cannot reveal.
+            monitor.inference()
             _, pcm, rate, _ = samples[0]
             started = time.perf_counter()
             backend.transcribe(pcm, rate)
@@ -201,14 +174,15 @@ def _variant(connection, directory, candidate, device):
             report.update(status='completed', summary=aggregate(report['rows']),
                           empty_transcripts=sum(not r['transcript'].strip() for r in report['rows']))
     except Exception as exc:
-        report.update(status='failed', reason=type(exc).__name__, error=str(exc))
+        report.update(status='failed', reason=type(exc).__name__)
     finally:
-        stop.set()
-        monitor.join(1)
-        report['resources'] = resources
-        if backend is not None:
-            backend.close()
-        connection.send(report)
+        report['resources'] = monitor.stop()
+        try:
+            if backend is not None:
+                backend.close()
+        except Exception:
+            report.update(status='failed', reason='cleanup_failed')
+        connection.send(public_report(report))
         connection.close()
 
 
@@ -252,7 +226,10 @@ def run(args):
     if getattr(args, 'endpoint_only', False):
         from testing.probes.pcm_endpoint import run as replay
         return replay(args)
-    read_samples(args.corpus)  # Validate once before starting any model.
+    samples, _, _ = read_samples(args.corpus)  # Validate before starting any model.
+    corpus_metadata = dict(sample_rates=sorted({r[2] for r in samples}),
+                           corpus_duration_seconds=sum(r[3] for r in samples))
+    del samples  # Do not retain a second PCM corpus in the parent on small Pi RAM.
     candidates = read_matrix(args)
     root = Path(__file__).resolve().parents[2]
     folder = root / 'logs' / 'stt-benchmark' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:8])
@@ -261,8 +238,10 @@ def run(args):
               'normalization': 'NFKC/casefold/punctuation removed; CER includes normalized spaces', 'variants': []}
     context = multiprocessing.get_context('spawn')
     for candidate in candidates:
+        checkpoint_dir = tempfile.TemporaryDirectory(prefix='valera-benchmark-')
+        checkpoint = Path(checkpoint_dir.name) / 'resources.json'
         parent, child = context.Pipe(duplex=False)
-        worker = context.Process(target=_variant, args=(child, args.corpus, candidate, args.device))
+        worker = context.Process(target=_variant, args=(child, args.corpus, candidate, args.device, checkpoint))
         worker.start()
         child.close()
         try:
@@ -279,8 +258,14 @@ def run(args):
                 worker.terminate()
             worker.join()
             parent.close()
+            if 'resources' not in entry:
+                entry['resources'] = read_checkpoint(checkpoint)
+                entry['resources_partial'] = True
+            checkpoint_dir.cleanup()
+        entry = {**environment(), **corpus_metadata, **entry}
+        entry = public_report(entry)
         report['variants'].append(entry)
         (folder / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
-        print(candidate['id'] + ': ' + entry['status'] + ' ' + json.dumps(entry.get('summary', {})), flush=True)
-    print('Private benchmark report: ' + str(folder / 'report.json'), flush=True)
+        print(public_report(candidate['id'], 'id') + ': ' + entry['status'] + ' ' + json.dumps(entry.get('summary', {})), flush=True)
+    print('Benchmark report: logs/stt-benchmark/' + folder.name + '/report.json', flush=True)
     return 0 if any(v['status'] == 'completed' for v in report['variants']) else 1

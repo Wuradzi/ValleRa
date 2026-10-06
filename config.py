@@ -131,10 +131,15 @@ class Settings:
         }
 
 
-def default_config() -> dict[str, Any]:
+def default_config(*, fresh: bool = True) -> dict[str, Any]:
+    performance_profile = 'fast'
+    if fresh and platform.system() == 'Linux':
+        from services.platform import resolve_platform
+        if resolve_platform().report().get('raspberry_pi') is True:
+            performance_profile = 'raspberry_pi'
     return {
         "config_version": 2,
-        "performance": {"profile": "fast"},
+        "performance": {"profile": performance_profile},
         "language": "uk",
         "assistant_name": "Валера",
         "confirmation_timeout_seconds": 15,
@@ -244,7 +249,8 @@ def _deep_merge(base: dict[str, Any], custom: dict[str, Any]) -> dict[str, Any]:
 
 def merge_config(custom: dict[str, Any]) -> dict[str, Any]:
     custom = migrate_config(custom)
-    result = _deep_merge(default_config(), custom)
+    # Merging an existing config must not reinterpret it based on current hardware.
+    result = _deep_merge(default_config(fresh=False), custom)
     old = custom.get('stt', {})
     if 'profile' in old:
         result['stt']['quality_profile'] = None

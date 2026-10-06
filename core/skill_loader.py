@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import asyncio
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -57,6 +58,10 @@ class SkillLoader:
                 )
                 continue
             if not manifest.get("enabled", True):
+                continue
+            platforms = manifest.get("platforms", ["windows"])
+            if platform.system().lower() not in platforms and "all" not in platforms:
+                logger.info("Skill %s skipped: platform_unavailable", manifest["name"])
                 continue
             if manifest["name"] in names:
                 logger.warning("Дублікат назви навички %s пропущено", manifest["name"])
