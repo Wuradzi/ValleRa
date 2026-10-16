@@ -67,7 +67,7 @@ class WindowsBaselineTests(unittest.TestCase):
         self.assertIn('No enabled installed speech voices', SPEECH_FUNCTIONS)
 
     def test_canaries_in_nested_config_logs_and_excluded_sources(self):
-        canaries = ['VALERA_TEST_API_KEY_938471', 'VALERA_TEST_PASSWORD_57291', 'VALERA_TEST_TOKEN_18473']
+        canaries = ['RAVEN_TEST_API_KEY_938471', 'RAVEN_TEST_PASSWORD_57291', 'RAVEN_TEST_TOKEN_18473']
         nested = {'custom': {'innocent': [dict(zip(['api_key', 'password', 'token'], canaries)),
                                          {canaries[0]: canaries[1]}, canaries[2]]}}
         (self.root / 'config.json').write_text(json.dumps(nested), encoding='utf-8')

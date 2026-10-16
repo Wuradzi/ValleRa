@@ -151,7 +151,7 @@ class Speaker:
         if generation != self.generation:
             return
         if text.strip() and not self._closing:
-            console_print(f"ValleRa: {text}")
+            console_print(f"Raven: {text}")
             if self.on_text is not None:
                 self.on_text(text)
             if not self.platform.supports('tts'):
@@ -306,7 +306,7 @@ class Speaker:
     def _test_voice_generation_sync(self) -> tuple[bool, str]:
         if not self.platform.supports('tts'):
             return False, 'TTS NOT_IMPLEMENTED on this platform'
-        text = "Перевірка генерації голосу ValleRa"
+        text = "Перевірка генерації голосу Raven"
         path = self.cache.path_for(
             text,
             self.settings.tts_voice_hint,

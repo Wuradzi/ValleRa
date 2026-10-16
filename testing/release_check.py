@@ -85,7 +85,7 @@ def run(args, root=None, runner=execute):
     result = dict(status='FAIL' if any(r['status'] == 'FAIL' for r in rows) else 'PASS', stages=rows,
                   warnings=['Automated PASS is not production readiness.', 'Unrequested live/GPU stages are not validated.'])
     (folder / 'report.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
-    print('ValleRa Release Check')
+    print('Raven Release Check')
     for row in rows:
         print(f"{row['name']}: {row['status']}")
     print(f"FINAL: {result['status']}\nReport: {folder / 'report.json'}")

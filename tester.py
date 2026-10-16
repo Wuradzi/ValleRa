@@ -27,9 +27,9 @@ ROOT = Path(__file__).resolve().parent
 # Overlap is intentional: a cross-cutting test runs once per invocation.
 GROUPS = {
     "voice": ("Голос: розпізнавання та озвучування", (
-        "audio_*", "model_cache", "whisper_comparison", "speaker", "streaming")),
+        "audio_*", "groq_stt", "model_cache", "whisper_comparison", "speaker", "streaming")),
     "stt": ("Розпізнавання мовлення", (
-        "audio_*", "model_cache", "whisper_comparison")),
+        "audio_*", "groq_stt", "model_cache", "whisper_comparison")),
     "tts": ("Озвучування та черга реплік", ("speaker", "streaming", "audio_lifecycle")),
     "llm": ("Моделі, контекст, помилки та резервування", (
         "llm_*", "gemini_provider", "empty_response_retry", "conversation_context", "streaming")),
@@ -53,6 +53,8 @@ GROUPS = {
 }
 
 PROBES = {
+    "cloud_stt": ("Live Gemini transcription of selected corpus WAVs; API quota and audio upload; optional local comparison", "run"),
+    "groq_stt_live": ("Opt-in Groq STT of ONE selected WAV; uploads audio, uses quota", "run"),
     "tts_benchmark": ("Offline backend-neutral TTS harness; fake PCM only, no playback/downloads", "run"),
     "stt_benchmark": ("Offline WAV backend/profile benchmark; без LLM/мережі/мікрофона", "run"),
     "workplace": ("Читання профілю, індексу й вікон Windows; без запуску програм/мережі/мікрофона", "run"),
@@ -74,11 +76,23 @@ def probe_options(name, argv):
     """Parse centrally, before importing optional or native dependencies."""
     parser = argparse.ArgumentParser(prog=f"tester.py --probe {name} --",
                                      description=PROBES[name][0])
-    if name == 'tts_benchmark':
+    if name == 'groq_stt_live':
+        parser.add_argument('--audio', type=Path, required=True)
+        parser.add_argument('--model', choices=('whisper-large-v3-turbo', 'whisper-large-v3'), default='whisper-large-v3-turbo')
+    elif name == 'cloud_stt':
+        parser.add_argument('--corpus', type=Path, required=True)
+        parser.add_argument('--local-comparison', action='store_true')
+        parser.add_argument('--diagnostic-only', action='store_true', help='Only the first approved recording')
+        parser.add_argument('--api', choices=('generate-content', 'interactions'), default='generate-content')
+        parser.add_argument('--basic-interactions', action='store_true', help='Omit optional transcription configuration')
+        parser.add_argument('--model', choices=('gemini-3.5-transcribe', 'gemini-2.5-flash'),
+                            default='gemini-3.5-transcribe', help='Explicit benchmark candidate, not a production setting')
+    elif name == 'tts_benchmark':
         parser.add_argument('--fake-mode', choices=('success', 'failure', 'malformed', 'cancel'), default='success')
         parser.add_argument('--cancellation', action='store_true')
         parser.add_argument('--variant-timeout', type=positive_timeout, default=30)
     elif name == 'stt_benchmark':
+        parser.add_argument('--cloud', action='store_true', help='Explicitly authorize Groq corpus upload; uses API quota')
         parser.add_argument('--corpus', type=Path, required=True)
         parser.add_argument('--matrix', type=Path)
         parser.add_argument('--candidates', nargs='+')
@@ -546,6 +560,10 @@ def run_selected(args) -> int:
     if probe:
         command.extend(["--", *args.probe_args])
         options = probe_options(probe, args.probe_args)
+        if probe == 'groq_stt_live' or (probe == 'stt_benchmark' and getattr(options, 'cloud', False)):
+            # Only the explicitly authorized cloud probe gets this provider key.
+            if 'GROQ_API_KEY' in os.environ:
+                environment['GROQ_API_KEY'] = os.environ['GROQ_API_KEY']
         if probe == "gemini" or getattr(options, "network", False):
             # Only explicitly requested provider checks receive provider credentials.
             from core.security import CONFIGURED_SECRET_ENV_NAMES
@@ -603,7 +621,7 @@ def run_selected(args) -> int:
 
 def show_modules() -> None:
     inventory = catalog()
-    print("\nКомплексний тестер ValleRa — автоматизовані перевірки")
+    print("\nКомплексний тестер Raven — автоматизовані перевірки")
     print("  a. Усі модулі")
     for index, (name, (description, _)) in enumerate(GROUPS.items(), 1):
         size = "вбудовані тести" if name == "tester" else f"файлів: {len(inventory[name])}"
@@ -656,7 +674,7 @@ def main(argv=None) -> int:
     if "--" in argv:
         separator = argv.index("--")
         argv, probe_args = argv[:separator], argv[separator + 1:]
-    parser = argparse.ArgumentParser(description="Єдиний комплексний тестер ValleRa.")
+    parser = argparse.ArgumentParser(description="Єдиний комплексний тестер Raven.")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--all", action="store_true", help="Перевірити всі модулі")
     selection.add_argument('--release-check', action='store_true', help='Deterministic checkpoint validation')
@@ -788,7 +806,7 @@ class TesterChecks(unittest.TestCase):
         self.assertEqual(report["tests_run"], 0)
 
     def test_import_error_survives_filter(self):
-        suite = unittest.TestLoader().loadTestsFromName("nonexistent_valera_test_987")
+        suite = unittest.TestLoader().loadTestsFromName("nonexistent_raven_test_987")
         report = run_suite(filtered_suite(suite, "unmatched_name"), io.StringIO())
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["counts"], {"error": 1})
@@ -1408,7 +1426,7 @@ class PcmChecks(unittest.TestCase):
         script = r'''
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
-Add-Type -Path $env:VALLERA_PULSE_SOURCE -ReferencedAssemblies ([System.Speech.Synthesis.SpeechSynthesizer].Assembly.Location)
+Add-Type -Path $env:RAVEN_PULSE_SOURCE -ReferencedAssemblies ([System.Speech.Synthesis.SpeechSynthesizer].Assembly.Location)
 function MakePcm([int]$amplitude, [int]$period) {
     $pcm = New-Object byte[] 2048
     for ($i = 0; $i -lt 1024; $i++) {
@@ -1418,15 +1436,15 @@ function MakePcm([int]$amplitude, [int]$period) {
     }
     return ,$pcm
 }
-[ValeraSpeechAudio]::Describe((New-Object byte[] 2048))
-[ValeraSpeechAudio]::Describe((MakePcm 1000 64))
-[ValeraSpeechAudio]::Describe((MakePcm 6000 64))
-[ValeraSpeechAudio]::Describe((MakePcm 6000 128))
+[RavenSpeechAudio]::Describe((New-Object byte[] 2048))
+[RavenSpeechAudio]::Describe((MakePcm 1000 64))
+[RavenSpeechAudio]::Describe((MakePcm 6000 64))
+[RavenSpeechAudio]::Describe((MakePcm 6000 128))
 '''
         result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
                                 capture_output=True, text=True, timeout=20,
                                 creationflags=subprocess.CREATE_NO_WINDOW,
-                                env=sanitized_environment({'VALLERA_PULSE_SOURCE': str(ROOT / 'services/audio/speech_pulse.cs')}))
+                                env=sanitized_environment({'RAVEN_PULSE_SOURCE': str(ROOT / 'services/audio/speech_pulse.cs')}))
         self.assertEqual(result.returncode, 0, result.stderr)
         silence, low, high, changed = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
         self.assertEqual(silence['samples'], [0] * 32)
@@ -1598,10 +1616,10 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.data['command_type'], 'chat')
 
     async def test_text_stop_bypasses_busy_command_queue_and_confirmation_has_priority(self):
-        from core.app import ValleRaApp
+        from core.app import RavenApp
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, Mock
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.web_ui = None
         app.services = {}
         app.processor = SimpleNamespace(interrupt_conversation=Mock(), dialogue_state=SimpleNamespace(
@@ -1626,10 +1644,10 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((turn.text, turn.source, turn.confidence), ('Нове питання', 'text', 1.0))
 
     async def test_confirmation_started_during_stop_rejects_uncorrelated_reply(self):
-        from core.app import ValleRaApp
+        from core.app import RavenApp
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, Mock
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.web_ui = None
         app.services = {}
         app.command_idle = asyncio.Event()
@@ -1647,12 +1665,12 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         app.confirmation.submit.assert_not_called()
 
     async def test_app_discards_late_local_answer_then_processes_new_text(self):
-        from core.app import ValleRaApp
+        from core.app import RavenApp
         from core.models import SkillResult
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, Mock
         speaker = self.speaker()
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.web_ui = None
         app.speaker = speaker
         app.running = True
@@ -1699,9 +1717,9 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
                 await speaker.close()
 
     async def test_confirmation_prompt_survives_invalidated_speech_scope(self):
-        from core.app import ValleRaApp
+        from core.app import RavenApp
         from core.speak import SPEECH_SCOPE
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.speaker = self.speaker()
         played = []
         with patch.object(app.speaker, '_stop_sync'), \
@@ -2274,7 +2292,7 @@ class WebAnswerChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.dialogue_context()["status"], "resources_found")
         self.assertNotIn("Snippet", json.dumps(self.service.dialogue_context()))
 
-    async def test_changed_model_search_never_reaches_confirmation_or_executor(self):
+    async def test_changed_model_search_is_replaced_with_original_before_executor(self):
         from core.processor import CommandProcessor
         from core.command_intent import CommandIntent
         from core.models import SkillResult
@@ -2286,11 +2304,12 @@ class WebAnswerChecks(unittest.IsolatedAsyncioTestCase):
         processor = CommandProcessor(SimpleNamespace(command_interpretation_enabled=True),
             SimpleNamespace(route=AsyncMock(return_value=SkillResult(False))), llm, Mock(),
             SimpleNamespace(record=Mock()), {"state": {"mode": "chat"}})
-        with patch("core.processor.execute_intent", AsyncMock()) as execute:
-            result = await processor.process("Команда: знайди рецепт борщу", confirm)
-        self.assertEqual(result.data["command_type"], "interpretation_invalid")
+        with patch("core.processor.execute_intent", AsyncMock(return_value=SkillResult(True))) as execute:
+            await processor.process("Команда: знайди рецепт борщу", confirm)
+        execute.assert_awaited_once()
+        self.assertEqual(execute.await_args.args[0], CommandIntent("web_search", {"query": "рецепт борщу"}))
+        # The mocked executor owns confirmation; no alternate approval is issued.
         confirm.assert_not_awaited()
-        execute.assert_not_awaited()
 
     def test_relevant_excerpt_finds_late_section_with_same_budget(self):
         from services.web.reader import relevant_excerpt, VisibleText
@@ -2473,7 +2492,7 @@ class WebAnswerChecks(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             manager = object.__new__(LLMManager)
             manager.settings = SimpleNamespace(history_limit=50, llm_total_timeout_seconds=2, llm_failures_before_switch=1)
-            manager.system_prompt = "Тебе звати Валера."
+            manager.system_prompt = "Тебе звати Рейвен."
             manager.history = AtomicJSONFile(Path(directory) / "history.json", {"messages": []})
             provider = SimpleNamespace(chat=AsyncMock(return_value="Пошук завершено."))
             manager.providers = {"gemini": provider}
@@ -3561,7 +3580,7 @@ class NaturalTurnChecks(unittest.IsolatedAsyncioTestCase):
                      "Відкрий браузер та видали файл", "У тексті написано: відкрий браузер"):
             with self.subTest(text=text):
                 self.assertFalse(direct_request(text, "open_app"))
-        for text in ("Відкрий браузер", "Можеш відкрити браузер?", "Валера, будь ласка, відкрий браузер"):
+        for text in ("Відкрий браузер", "Можеш відкрити браузер?", "Рейвен, будь ласка, відкрий браузер"):
             self.assertTrue(direct_request(text, "open_app"))
         self.assertTrue(direct_request("повтори тільки те, що не вдалося", "workplace_retry"))
 

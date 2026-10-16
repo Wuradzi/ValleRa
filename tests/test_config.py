@@ -13,6 +13,18 @@ from config import (
 
 
 class ConfigTests(unittest.TestCase):
+    def test_raven_address_forms_preserve_explicit_action(self):
+        from core.natural_turn import exact_open_request
+        for name in ('Рейвен', 'Рейвене', 'Raven'):
+            self.assertEqual(exact_open_request(f'{name}, відкрий Telegram'), 'Telegram')
+
+    def test_raven_identity_migrates_only_old_default_without_mutation(self):
+        for old in ('Валера', 'ValleRa', 'valera'):
+            custom = {'assistant_name': old}
+            self.assertEqual(merge_config(custom)['assistant_name'], 'Рейвен')
+            self.assertEqual(custom['assistant_name'], old)
+        self.assertEqual(merge_config({})['assistant_name'], 'Рейвен')
+        self.assertEqual(merge_config({'assistant_name': 'Мій помічник'})['assistant_name'], 'Мій помічник')
     def test_selective_refinement_budgets_and_thresholds(self):
         config = merge_config({})
         self.assertTrue(config['stt']['selective_whisper_enabled'])

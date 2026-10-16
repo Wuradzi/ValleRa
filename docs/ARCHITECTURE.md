@@ -1,4 +1,85 @@
-# Архітектура ValleRa
+# Архітектура Raven
+
+## 16.10.2026: тимчасовий контекст локального документа
+
+CommandProcessor володіє DocumentReading: явна команда читання, короткий
+вибір назви/номера (120s), existing confirm_action, перевірка stamp/дозволеного
+шляху, bounded read у worker thread. Ненадійні/обірвані turns не читають файл;
+повна unscored Groq репліка потребує окремої згоди, як local memory flow.
+Cancellation не публікує пізній snapshot. Нового model ACTION tool немає.
+DocumentContext тримає один snapshot лише в RAM, з TTL30min і лексичними
+уривками; не містить services, queues чи LLM history. Поточні chat/converse
+отримують document_context як user-priority недовірені дані. Raw текст не
+дописується в history, але відповіді моделі можуть містити його зміст.
+Явні direct_request не отримують документ, existing ActionPolicy/confirmation
+не змінені. Інструкція в prompt — додатковий захід, не гарантія від галюцинацій.
+Каталог можливостей передається в natural-turn prompt з урахуванням enabled
+skills. SYSTEM_PROMPT вимагає доречної відповіді без нав’язування старої теми;
+якість цієї поведінки ще потребує живої перевірки.
+
+## 09.10.2026: sentence preview для explicit CHAT
+
+LLMManager.converse передає завершені речення через on_chunk ще до EOF.
+ChatPreview працює лише після точного CHAT header, сканує накопичений body
+на control markers та існуючий safe_dialogue guard. Непунктуйований хвіст,
+plain fallback і CLARIFY чекають finish; ACTION/PROPOSAL/FOLLOWUP не preview.
+Після першого preview результат ніколи не може перейти в ACTION: пізній
+control suffix або переписаний safe_dialogue результат означає unavailable.
+До початку preview збережена стара логіка повного TurnDecoder.finish.
+Processor має callback у natural і complete Groq candidate paths; response_spoken
+прибирає повторне озвучення. На помилці часткова відповідь не записується як
+завершена і не переписує попередню історію. Cancellation перевіряється навіть
+якщо provider приглушив CancelledError; Speaker generation лишається власником
+скасування черги. STT/endpointing/confirmation/executor не змінені.
+
+Обмеження: вже вимовлений текст неможливо відкликати при пізньому invalid suffix.
+Preview є евристично перевіреним текстом, а не гарантією фактологічності.
+Розбиття за пунктуацією може трактувати скорочення як межу; фраза без межі
+чекатиме EOF. Перевіряти endpoint→first_phrase/tts_submit та час фактичного
+звуку окремо від llm.first_text. Живе прискорення потребує голосового тесту.
+
+## Поточний зріз: 08.10.2026
+
+### Ознаки розпізнавання на межі черги
+
+`RecognitionPolicy.turn_flags()` є єдиним явним адаптером ознак із
+`RecognitionResult` у `TurnEnvelope`. Він не встановлює нової політики довіри.
+
+| Поле envelope | Фактичне значення |
+|---|---|
+| utterance_incomplete | явне значення STT; лише для legacy None — fallback до incomplete |
+| capture_truncated | запис обрізано, незалежно від мовної завершеності |
+| recognition_unreliable | ознака ненадійності від виробника STT |
+| confidence_available | чи є виміряна оцінка, а не вигаданий нуль |
+| clarification_required | legacy incomplete: повторити/уточнити замість tool-free chat |
+| action_eligible | збережене правило confidence_available AND NOT fragmented; не дозвіл виконання |
+
+`RecognitionResult.fragmented` поки залишається legacy restriction від STT;
+`TurnEnvelope.fragmented` — compatibility view NOT action_eligible. Це різні
+контракти, а не універсальна ознака незавершеної фрази. Адаптер не виправляє
+суперечливі producer flags самостійно: зміна їхніх правил потребує окремого
+safety patch. Поточні downstream checks і confirmation залишаються активними.
+
+`core/local_action_resolver.py` спільно визначає exact `open_app` candidates
+для звичайного natural path та Groq proposal path: literal target, enabled apps,
+точний збіг каталогу (лише boolean True), lookup deadline 250 ms.
+Resolver не виконує дій і не надає ACTION eligibility. Processor зберігає
+окремі trust/scoped gates; confirmation та execution verification залишаються
+в існуючих власників. Інші локальні маршрути ще не об'єднані.
+
+Розпізнавання використовує backend boundary: локальний faster-whisper або
+опційний Groq STT; Vosk залишається для constrained confirmation.
+`RecognitionResult` передає ознаки надійності, а `TurnEnvelope` переносить
+репліку та її operational ID через orchestration до processor.
+Відсутня confidence хмарного STT не означає виміряну нульову впевненість
+і не надає автоматичного дозволу виконувати дії. Підтримувана пропозиція
+проходить локальну політику, корельоване підтвердження та перевірку виконання.
+
+Особиста пам’ять змінюється за явним запитом із підтвердженням; це локальні
+дані, не навчання моделі. Видалення факту не стирає архіви та журнали.
+Історичні Phase-розділи нижче пояснюють еволюцію, а не паралельні runtime шляхи.
+Практичні налаштування: [STT](STT_BACKENDS.md), [Groq](GROQ_STT.md),
+[користування](USER_GUIDE.md), [Linux](LINUX_RUNTIME.md).
 
 ## Phase 3C: Linux runtime implementation
 
@@ -220,7 +301,7 @@ Phase 3B: можна окремо вводити platform adapters, не змі�
 ## Typed turn transport
 
 `core.models.TurnEnvelope` — frozen/slots dataclass, immutable snapshot одного
-dispatch. `ValleRaApp._enqueue_command()` створює його з `RecognitionResult`
+dispatch. `RavenApp._enqueue_command()` створює його з `RecognitionResult`
 або текстового введення; `command_queue` приймає тільки envelope, не positional
 tuples. `CommandProcessor.process()` отримує той самий operational `turn_id`,
 а для локального маршруту передає його в `CommandContext.turn_id`.

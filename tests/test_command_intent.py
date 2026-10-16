@@ -20,6 +20,58 @@ from services.llm.manager import LLMManager
 from services.llm.errors import ResponseError
 
 
+class PoliteRequestTests(unittest.TestCase):
+    def test_exact_app_polite_forms_preserve_literal_target(self):
+        from core.natural_turn import exact_open_request
+        for text, target in [
+            ('Відкрій мені Telegram.', 'Telegram'),
+            ('Відкрий мені Telegram', 'Telegram'),
+            ('А ти можеш відкрити мені програму Telegram?', 'Telegram'),
+            ('Можеш запустити Блокнот?', 'Блокнот'),
+            ('Чи можеш ти мені відкрити VS Code?', 'VS Code'),
+            ('Рейвен, відкрий програму Chrome, будь ласка.', 'Chrome'),
+            ('Мені треба запустити Firefox', 'Firefox'),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(exact_open_request(text), target)
+        for text in ('Не відкрий Telegram', 'Я відкрив Telegram',
+                     'Якщо можеш, відкрий Telegram', 'Переклади відкрий Telegram',
+                     'Відкрий Telegram і видали файл', 'Відкрий "Telegram"'):
+            self.assertIsNone(exact_open_request(text))
+
+    def test_dialogue_filter_matches_words_not_substrings(self):
+        from core.natural_turn import safe_dialogue, turn_prompt
+        self.assertEqual(safe_dialogue('Розшукаємо твої сильні сторони разом?'),
+                         'Розшукаємо твої сильні сторони разом?')
+        self.assertIn('Дію ще не виконано', safe_dialogue('Відкриваю Telegram.'))
+        prompt = turn_prompt(set())
+        self.assertIn('попередніх запусків', prompt)
+        self.assertIn('Враховуй виправлення користувача', prompt)
+
+    def test_explicit_polite_requests_and_stt_variant(self):
+        from core.natural_turn import direct_request, request_scope
+        for text, scope in (
+            ('Відкрій телеграм.', 'open_app'),
+            ('Я би хотів би, щоб ти мені знайшов файл табель', 'find_files'),
+            ('Я хотіла б, щоб ти відкрила браузер', 'open_app'),
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(direct_request(text, scope))
+                self.assertEqual(request_scope(text), scope)
+
+    def test_politeness_does_not_remove_negation_or_narrative(self):
+        from core.natural_turn import direct_request
+        for text in ('Я не хотів би, щоб ти відкрив браузер',
+                     'Я хотів би, щоб ти не відкрив браузер',
+                     'Він хотів би, щоб ти відкрив браузер',
+                     'Якщо я хотів би, щоб ти відкрив браузер',
+                     'Переклади: я хотів би, щоб ти відкрив браузер',
+                     'Я вчора відкрив браузер', 'Не відкрій браузер',
+                     '«Відкрій браузер»'):
+            with self.subTest(text=text):
+                self.assertFalse(direct_request(text, 'open_app'))
+
+
 class ContextualProposalTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from core.models import TurnEnvelope
@@ -56,6 +108,31 @@ class ContextualProposalTests(unittest.IsolatedAsyncioTestCase):
         envelope = self.TurnEnvelope(turn_id=f'fixture:{self.sequence}', session_id='fixture',
             source='text', text=text, transcript=text, stt_engine='text', confidence=1, **flags)
         return await self.processor.process(envelope, self.confirm)
+
+    async def test_original_search_is_confirmed_and_executed_not_model_rewrite(self):
+        self.output = 'ACTION\n' + json.dumps(
+            {'tool': 'web_search', 'arguments': {'query': 'реставрація Мейдзі'}})
+        for accepted in (False, True):
+            self.confirm.reset_mock()
+            self.confirm.return_value = accepted
+            with patch('skills.web.skill.search_web', new_callable=AsyncMock,
+                       return_value=SkillResult(True, 'fixture', {'success': True})) as search:
+                await self.turn('Знайди в інтернеті реставрацію Meiji.')
+            self.confirm.assert_awaited_once()
+            self.assertIn('реставрацію Meiji.', str(self.confirm.await_args))
+            if accepted:
+                search.assert_awaited_once_with('реставрацію Meiji.', self.services)
+            else:
+                search.assert_not_awaited()
+
+    async def test_original_search_cannot_upgrade_unreliable_turn(self):
+        self.output = 'ACTION\n' + json.dumps(
+            {'tool': 'web_search', 'arguments': {'query': 'реставрація Мейдзі'}})
+        with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+            await self.turn('Знайди в інтернеті реставрацію Meiji.',
+                            action_eligible=False, recognition_unreliable=True)
+        execute.assert_not_awaited()
+        self.confirm.assert_not_awaited()
 
     async def offer(self, tool='web_search', arguments=None):
         self.output = 'PROPOSAL\n' + json.dumps({'tool': tool, 'arguments': arguments or {'query': 'безкоштовні API для STT'}})
@@ -196,9 +273,9 @@ class ContextualProposalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.processor.dialogue_state.proposals.pending)
 
     async def test_safety_confirmation_consumes_reply_before_proposal(self):
-        from core.app import ValleRaApp
+        from core.app import RavenApp
         await self.offer()
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.processor, app.speaker, app.services, app.web_ui = self.processor, self.speaker, self.services, None
         app.confirmation = ConfirmationService(app._say_confirmation, timeout_seconds=1)
         question = asyncio.create_task(app.confirmation.ask('Fixture safety approval'))
@@ -254,8 +331,8 @@ class ContextualProposalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.processor.dialogue_state.proposals.pending)
 
     async def test_duplicate_envelope_acceptance_dispatches_once(self):
-        from core.app import ValleRaApp
-        app = object.__new__(ValleRaApp)
+        from core.app import RavenApp
+        app = object.__new__(RavenApp)
         app.command_queue = asyncio.Queue()
         app.command_idle = asyncio.Event()
         app.running, app.web_ui = True, None
@@ -353,6 +430,34 @@ class ContextualProposalTests(unittest.IsolatedAsyncioTestCase):
 
 
 class IntentValidationTests(unittest.TestCase):
+    def test_original_search_keeps_names_constraints_numbers_and_punctuation(self):
+        from core.command_intent import original_search_intent, preserves_search_intent
+        candidate = CommandIntent('web_search', {'query': 'інша тема'})
+        for request, query in (
+            ('Знайди в інтернеті реставрацію Meiji.', 'реставрацію Meiji.'),
+            ('Знайди C++ API у браузері', 'C++ API'),
+            ('Пошукай тільки безкоштовні API, не платні, 2026',
+             'тільки безкоштовні API, не платні, 2026'),
+            ('Знайти в інтернеті Foo-Bar 2.0', 'Foo-Bar 2.0'),
+        ):
+            with self.subTest(request=request):
+                bound = original_search_intent(request, candidate)
+                self.assertEqual(bound.arguments['query'], query)
+                self.assertTrue(preserves_search_intent(request, bound))
+        self.assertEqual(candidate.arguments['query'], 'інша тема')
+
+    def test_original_search_does_not_repair_ambiguous_or_unsafe_requests(self):
+        from core.command_intent import original_search_intent
+        candidate = CommandIntent('web_search', {'query': 'fixture'})
+        for request in ('Не знайди Meiji', 'Я читав про Meiji', 'Знайди',
+                        'Знайди Meiji і відкрий браузер', 'Знайди API_KEY=fixture',
+                        'Знайди ' + 'a' * 301):
+            self.assertIs(original_search_intent(request, candidate), candidate)
+        other = CommandIntent('open_app', {'name': 'браузер'})
+        self.assertIs(original_search_intent('Знайди Meiji', other), other)
+        invalid = CommandIntent('web_search', {'query': 'fixture', 'extra': 'bad'})
+        self.assertIs(original_search_intent('Знайди Meiji', invalid), invalid)
+
     def test_typed_execution_states_do_not_infer_success(self):
         from core.execution_result import ExecutionStatus
         cases = [

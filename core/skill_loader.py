@@ -71,7 +71,7 @@ class SkillLoader:
                 logger.warning("Файл навички відсутній: %s", skill_path)
                 continue
             spec = importlib.util.spec_from_file_location(
-                f"valera_skill_{manifest_path.parent.name}",
+                f"raven_skill_{manifest_path.parent.name}",
                 skill_path,
             )
             if spec is None or spec.loader is None:

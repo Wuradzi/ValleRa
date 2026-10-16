@@ -83,7 +83,7 @@ def _atomic_write(path: Path, value: str) -> None:
 
 
 def run_first_start_wizard(project_root: Path) -> None:
-    print("=== Початкове налаштування ValleRa ===")
+    print("=== Початкове налаштування Raven ===")
     config_path = project_root / "config.json"
     env_path = project_root / ".env"
     existing_config = _load_existing_config(config_path)
@@ -159,7 +159,7 @@ def run_first_start_wizard(project_root: Path) -> None:
         recovery_file = project_root / "RECOVERY_KEY.txt"
         _atomic_write(
             recovery_file,
-            "КЛЮЧ ВІДНОВЛЕННЯ VALLeRA\n\n" + recovery_key + "\n",
+            "КЛЮЧ ВІДНОВЛЕННЯ RAVEN\n\n" + recovery_key + "\n",
         )
         try:
             recovery_file.chmod(0o600)

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
-from core.app import ValleRaApp
+from core.app import RavenApp
 
 from services.files.file_service import FileService
 from skills.files.skill import find_files, handle
@@ -13,7 +13,7 @@ from skills.files.skill import find_files, handle
 
 class SearchCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_ui_cancel_is_correlated_and_confirmation_remains_prioritized(self):
-        app = ValleRaApp.__new__(ValleRaApp)
+        app = RavenApp.__new__(RavenApp)
         files = FileService([])
         app.services = {'files': files}
         app.web_ui = Mock()

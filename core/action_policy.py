@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 
-from core.command_intent import CommandIntent, preserves_search_intent
+from core.command_intent import CommandIntent, original_search_intent, preserves_search_intent
 from core.natural_turn import direct_request, application_name_reply, request_scope
 from core.dialogue_decision import DecisionKind
 from core.action_proposal import PendingActionProposal, acceptance_matches, PROPOSABLE
@@ -71,6 +71,7 @@ def natural_action_permission(decision, request, text, pending, scoped, *, actio
                           and not (pending and application_name_reply(text) is not None)):
         return permission(PolicyOutcome.CLARIFY, response=
             'Не впевнений, що це пряме прохання виконати дію. Уточніть, будь ласка; нічого не виконано.')
+    intent = original_search_intent(request, intent)
     if not preserves_search_intent(request, intent):
         return permission(PolicyOutcome.CLARIFY, response=
             'Уточніть точний запит пошуку: не можу надійно зберегти його зміст.')

@@ -4,10 +4,10 @@ from core.console import console_print as print
 
 
 async def run_diagnostics(settings, secret_store) -> int:
-    from core.app import ValleRaApp
+    from core.app import RavenApp
 
-    print("=== Діагностика ValleRa ===")
-    app = ValleRaApp(settings, secret_store, text_only=False)
+    print("=== Діагностика Raven ===")
+    app = RavenApp(settings, secret_store, text_only=False)
     await app.speaker.start()
     try:
         summary, report = await app.services["diagnostics"].run()

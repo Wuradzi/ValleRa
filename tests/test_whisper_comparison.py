@@ -32,7 +32,7 @@ class AccuracyTests(unittest.TestCase):
         self.assertTrue(score("Привіт!", "Привіт.")["exact"])
 
     def test_inserted_hint_words_can_make_wer_exceed_one_hundred_percent(self):
-        result = score("привіт", "привіт Валера Команда браузер")
+        result = score("привіт", "привіт Рейвен Команда браузер")
         self.assertEqual(result["wer_percent"], 300)
 
     def test_weighted_wer_and_rtf_not_averages_of_sentence_percentages(self):

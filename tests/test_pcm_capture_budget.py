@@ -9,11 +9,11 @@ import queue
 import numpy as np
 
 from config import Settings, ProjectPaths
-from services.audio.pcm_capture import capture_pcm
+from services.audio.pcm_capture import capture_pcm, sparse_activity
 
 
 class CaptureBudgetTests(TestCase):
-    def capture(self, frames, cancel_at=None, overflow=False):
+    def capture(self, frames, cancel_at=None, overflow=False, utterance_timeout=None):
         clock = [0.0]
         source = iter(frames)
         rate = 16000
@@ -40,7 +40,8 @@ class CaptureBudgetTests(TestCase):
              patch('services.audio.pcm_capture.time.monotonic', side_effect=lambda: clock[0]), \
              patch('services.audio.pcm_capture.time.perf_counter', side_effect=lambda: clock[0]):
             result = capture_pcm(SimpleNamespace(RawInputStream=stream), None, rate, 15, settings,
-                                 lambda: cancel_at is not None and clock[0] >= cancel_at, nullcontext)
+                                 lambda: cancel_at is not None and clock[0] >= cancel_at, nullcontext,
+                                 utterance_timeout=utterance_timeout)
         return result, clock[0]
 
     def test_wait_for_onset_does_not_spend_speech_budget(self):
@@ -58,6 +59,36 @@ class CaptureBudgetTests(TestCase):
         self.assertEqual(result.endpoint_reason, 'capture_limit')
         self.assertLess(elapsed, 25.2)
 
+    def test_long_natural_turn_finishes_at_silence(self):
+        result, elapsed = self.capture([0] * 120 + [3000] * 220 + [0] * 20,
+                                       utterance_timeout=45)
+        self.assertFalse(result.truncated)
+        self.assertEqual(result.endpoint_reason, 'silence')
+        self.assertGreater(elapsed, 34)
+        self.assertLess(elapsed, 36)
+
+    def test_extended_budget_is_still_bounded(self):
+        result, elapsed = self.capture([0] * 120 + [3000] * 800, utterance_timeout=45)
+        self.assertTrue(result.truncated)
+        self.assertEqual(result.endpoint_reason, 'capture_limit')
+        self.assertLess(elapsed, 57.2)
+
+    def test_extended_budget_does_not_extend_onset_or_short_turn(self):
+        result, elapsed = self.capture([0] * 800, utterance_timeout=45)
+        self.assertFalse(result.pcm)
+        self.assertLess(elapsed, 15.2)
+        result, elapsed = self.capture([3000] * 5 + [0] * 20, utterance_timeout=45)
+        self.assertFalse(result.truncated)
+        self.assertLess(elapsed, 1.4)
+
+    def test_utterance_budget_config_validation(self):
+        from config import merge_config, validate_config, ConfigError
+        for value in (15, 45, 60):
+            validate_config(merge_config({'stt': {'utterance_max_seconds': value}}))
+        for value in (True, 0, 61, '45'):
+            with self.assertRaises(ConfigError):
+                validate_config(merge_config({'stt': {'utterance_max_seconds': value}}))
+
     def test_silence_is_bounded_and_empty(self):
         result, elapsed = self.capture([0] * 400)
         self.assertEqual(result.pcm, b'')
@@ -67,6 +98,16 @@ class CaptureBudgetTests(TestCase):
         result, elapsed = self.capture([3000] * 5 + [0] * 20)
         self.assertFalse(result.truncated)
         self.assertLess(elapsed, 1.4)
+        self.assertAlmostEqual(result.active_audio_ms, 500)
+        self.assertAlmostEqual(result.speech_span_ms, 500)
+        self.assertFalse(sparse_activity(result))
+
+    def test_sparse_spikes_preserve_evidence_for_pre_upload_guard(self):
+        result, _ = self.capture([3000] + [0] * 40 + [3000] + [0] * 40 + [3000] + [0] * 20)
+        self.assertTrue(result.pcm)
+        self.assertAlmostEqual(result.active_audio_ms, 300)
+        self.assertAlmostEqual(result.speech_span_ms, 8300)
+        self.assertTrue(sparse_activity(result))
 
     def test_cancel_and_overflow_preserve_safety(self):
         result, elapsed = self.capture([3000] * 100, cancel_at=1)

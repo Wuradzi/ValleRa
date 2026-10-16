@@ -1,5 +1,13 @@
 # Ukrainian STT backends — Phase 3A.2
 
+## Optional Groq cloud candidate — Phase 3D.2
+
+See [Groq STT setup, trust limitation and explicit probes](GROQ_STT.md).
+Opt-in only; JSON confidence unknown: successful complete text retains
+action_eligible=False. A restricted proposal path supports app opening, file
+search, weather and web search after explicit correlated confirmation.
+One WAV live probe passed; post-patch live actions remain unvalidated.
+
 ## Phase 3D.1 — benchmark instrumentation (2026-10-06)
 
 Infrastructure only: no model selection, installation, production default
@@ -86,7 +94,7 @@ shutdown validated. Natural STT/E2E NOT_VALIDATED; Linux TTS NOT_IMPLEMENTED.
 
 ### 1. Actual unrestricted / confirmation paths
 
-`ValleRaApp._voice_loop → _listen_for_turn` (`core/app.py`) calls
+`RavenApp._voice_loop → _listen_for_turn` (`core/app.py`) calls
 `SpeechListener.listen_once(15.0, None)` (`core/stt_listener.py`) in a thread.
 Listener selects device/rate via inherited `VoskListener._input_candidates`,
 then `services/audio/pcm_capture.capture_pcm → AcousticEndpoint` captures PCM16

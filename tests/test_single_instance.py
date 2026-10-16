@@ -13,7 +13,7 @@ class SingleInstanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
-        self.lock_path = Path(self.temp_dir.name) / "valera.lock"
+        self.lock_path = Path(self.temp_dir.name) / "raven.lock"
 
     def test_second_instance_is_rejected(self) -> None:
         first = SingleInstance(self.lock_path)

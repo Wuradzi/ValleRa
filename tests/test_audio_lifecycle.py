@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from config import ProjectPaths, Settings
-from core.app import ValleRaApp
+from core.app import RavenApp
 from core.models import RecognitionResult, SkillResult, TurnEnvelope
 from core.performance import DISABLED_PERFORMANCE, TurnTiming
 from core.speak import Speaker
@@ -283,7 +283,7 @@ class VoiceTurnContractTests(unittest.IsolatedAsyncioTestCase):
     """Production loop contracts; fake capture/processor, no external actions."""
 
     def app(self):
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.running = app.microphone_enabled = True
         app._microphone_epoch = 0
         app._mic_ready = asyncio.Event()
@@ -459,7 +459,7 @@ class SpeakerLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_app_cancellation_closes_native_workers(self):
         speaker = self.speaker()
         worker = ProcessWhisperRecognizer(speaker.settings, worker_target=slow_worker)
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.settings = speaker.settings
         app.web_ui = None
         app.running = True
@@ -535,7 +535,7 @@ class SpeakerLifecycleTests(unittest.IsolatedAsyncioTestCase):
             process.wait()
 
     async def test_text_reply_starting_during_capture_discards_audio(self):
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.microphone_enabled = True
         app._microphone_epoch = 0
         finished = threading.Event()

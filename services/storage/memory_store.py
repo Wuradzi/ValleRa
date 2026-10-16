@@ -60,5 +60,10 @@ class MemoryStore:
     def all(self) -> list[dict]:
         return self.file.load()["items"]
 
+    def remove_ids(self, ids: set[str]) -> None:
+        state = self.file.load()
+        state['items'] = [item for item in state['items'] if item['id'] not in ids]
+        self.file.save(state)
+
     def clear(self) -> None:
         self.file.save({"items": []})

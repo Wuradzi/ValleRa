@@ -4,12 +4,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from core.app import ValleRaApp
+from core.app import RavenApp
 
 
 class InputDeliveryTests(unittest.IsolatedAsyncioTestCase):
     def app(self):
-        app = ValleRaApp.__new__(ValleRaApp)
+        app = RavenApp.__new__(RavenApp)
         app.command_idle = asyncio.Event()
         app.confirmation = SimpleNamespace(awaiting=False, request_id=None, submit=Mock())
         app.processor = SimpleNamespace(

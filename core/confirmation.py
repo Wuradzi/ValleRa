@@ -51,8 +51,27 @@ class ConfirmationService:
         "скасуй",
         "відмовляюсь",
     }
-    GRAMMAR = sorted(ACCEPTED | REJECTED)
+    # Keep semantic aliases for UI/text and existing transcripts, but do not
+    # make every positive synonym compete acoustically with a short "так".
+    GRAMMAR = sorted({'так', 'підтверджую', 'так підтверджую'} | REJECTED)
     VOICE_MIN_CONFIDENCE = 0.8
+    VOICE_DENY_MIN_CONFIDENCE = 0.5
+
+    @staticmethod
+    def voice_confidence(result):
+        """Cloud confidence is unavailable, never manufacture a numeric score.
+
+        Only a complete, successful Groq utterance may use exact semantic
+        parsing without a confidence threshold. Request correlation is still
+        enforced by submit; malformed/truncated/late audio cannot approve.
+        """
+        if result.engine == 'groq':
+            if (not result.confidence_available and result.text.strip()
+                    and not result.recognition_unreliable and not result.capture_truncated
+                    and not result.utterance_incomplete and not result.incomplete):
+                return None
+            return float('nan')
+        return result.confidence
 
     @classmethod
     def recognition_grammar(cls, model):
@@ -106,14 +125,12 @@ class ConfirmationService:
             self._clear_responses()
             self.request_id = uuid4().hex
             self._request_event.set()
-            prompt = f"Підтвердіть операцію: {operation}. Скажіть так або ні."
+            prompt = f"{operation}. Підтвердження: так; скасування: відміна (або ні)."
             self.prompt = prompt
             try:
                 print(f"[CONFIRM] {prompt}")
                 spoken = operation.spoken if isinstance(operation, ConfirmationPrompt) else operation
-                short = isinstance(operation, ConfirmationPrompt) and operation.short_question
-                await self.speak(f"{spoken.rstrip(' .?!')}? Так чи ні." if short
-                                 else f"Підтвердіть операцію: {spoken}. Скажіть так або ні.")
+                await self.speak(f"{spoken.rstrip(' .?!')}?")
                 if self.wait_for_speech:
                     await self.wait_for_speech()
                 loop = asyncio.get_running_loop()
@@ -142,7 +159,7 @@ class ConfirmationService:
                         await self._cancel_notice(operation, "declined")
                         self._response_processed.set()
                         return False
-                    await self.speak("Не розібрав відповідь. Скажіть так або ні.")
+                    await self.speak("Не розібрав відповідь. Скажіть так або відміна.")
                     if self.wait_for_speech:
                         await self.wait_for_speech()
                     self._response_processed.set()
@@ -163,16 +180,15 @@ class ConfirmationService:
 
     @classmethod
     def _decision(cls, answer: str, confidence: float | None = None) -> bool | None:
-        if confidence is not None and (not math.isfinite(confidence)
-                                       or not cls.VOICE_MIN_CONFIDENCE <= confidence <= 1):
+        if confidence is not None and (not math.isfinite(confidence) or not 0 <= confidence <= 1):
             return None
         normalized = " ".join(
             re.sub(r"[^0-9a-zа-яіїєґ'’\s]", " ", answer.lower()).split()
         )
-        if normalized in cls.ACCEPTED:
-            return True
         if normalized in cls.REJECTED:
-            return False
+            return False if confidence is None or confidence >= cls.VOICE_DENY_MIN_CONFIDENCE else None
+        if normalized in cls.ACCEPTED:
+            return True if confidence is None or confidence >= cls.VOICE_MIN_CONFIDENCE else None
         return None
 
     def _clear_responses(self) -> None:

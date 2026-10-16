@@ -20,6 +20,7 @@ class Capability:
 CATALOG = (
     Capability("find_files", "files", "знайди файл <назва>", (("query", "частина назви файла"), ("extension", ".pdf")),
                "Пошук за назвою, не вмістом; extension: порожнє, .pdf, .docx, .txt, .md, .xlsx, .pptx, .odt, .png, .jpg, .jpeg, .webp, .bmp. Якщо тип невідомий — порожнє розширення; не вимагай його. Після пошуку локальна система запропонує відкрити знайдений файл. Не вигадуй шлях."),
+    Capability("read_document", "files", "прочитай файл <назва або локальний шлях>"),
     Capability("open_app", "apps", "відкрий <програму>", (("name", "назва встановленої програми"),),
                "Лише назва програми або браузер; не шлях, URL, аргументи чи shell-команда."),
     Capability("window_control", "windows", "розгорни вікно <програма>",

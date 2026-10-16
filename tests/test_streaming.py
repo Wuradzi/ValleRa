@@ -36,7 +36,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         manager.settings = SimpleNamespace(
             history_limit=50, llm_total_timeout_seconds=2, llm_failures_before_switch=2
         )
-        manager.system_prompt = "Валера"
+        manager.system_prompt = "Рейвен"
         manager.history = AtomicJSONFile(Path(temp.name) / "history.json", {"messages": []})
         manager.providers = {"gemini": provider}
         manager.active_name = "gemini"

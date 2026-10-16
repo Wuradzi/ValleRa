@@ -38,16 +38,16 @@ class HybridRecognitionTests(unittest.TestCase):
 
     def test_whisper_replaces_unrestricted_vosk_text(self):
         result = self.listener._select_result(
-            RecognitionResult("валера команда відкриє голограм", 0.81, "vosk"),
+            RecognitionResult("рейвен команда відкриє голограм", 0.81, "vosk"),
             RecognitionResult(
-                "Валера, команда, відкрий Telegram", 0.88, "whisper"
+                "Рейвен, команда, відкрий Telegram", 0.88, "whisper"
             ),
         )
-        self.assertEqual(result.text, "Валера, команда, відкрий Telegram")
+        self.assertEqual(result.text, "Рейвен, команда, відкрий Telegram")
         self.assertEqual(result.engine, "whisper")
 
     def test_low_confidence_whisper_keeps_vosk(self):
-        vosk = RecognitionResult("валера котра година", 0.76, "vosk")
+        vosk = RecognitionResult("рейвен котра година", 0.76, "vosk")
         result = self.listener._select_result(
             vosk,
             RecognitionResult("незрозумілий шум", 0.2, "whisper"),
@@ -64,7 +64,7 @@ class HybridRecognitionTests(unittest.TestCase):
 
     def test_whisper_text_is_not_modified_with_vosk_words(self):
         result = self.listener._select_result(
-            RecognitionResult("валера відкритого грам", 0.78, "vosk"),
+            RecognitionResult("рейвен відкритого грам", 0.78, "vosk"),
             RecognitionResult("відкрий Telegram", 0.9, "whisper"),
         )
         self.assertEqual(result.text, "відкрий Telegram")
@@ -73,9 +73,9 @@ class HybridRecognitionTests(unittest.TestCase):
     def test_whisper_preserves_natural_address_by_name(self):
         result = self.listener._select_result(
             RecognitionResult("моя команда", 0.7, "vosk"),
-            RecognitionResult("Валера, моя команда", 0.86, "whisper"),
+            RecognitionResult("Рейвен, моя команда", 0.86, "whisper"),
         )
-        self.assertEqual(result.text, "Валера, моя команда")
+        self.assertEqual(result.text, "Рейвен, моя команда")
         self.assertEqual(result.engine, "whisper")
 
     def test_command_prefix_disagreement_keeps_non_command_transcript(self):
@@ -113,7 +113,7 @@ class HybridRecognitionTests(unittest.TestCase):
     def test_short_name_is_refined_like_any_other_phrase(self):
         samples = np.full(16_000, 3000, dtype=np.int16).tobytes()
         refine, reason = self.listener._should_refine(
-            RecognitionResult("валера", 0.9, "vosk"),
+            RecognitionResult("рейвен", 0.9, "vosk"),
             samples,
             16_000,
         )
@@ -123,7 +123,7 @@ class HybridRecognitionTests(unittest.TestCase):
     def test_spoken_request_still_uses_whisper(self):
         samples = np.full(16_000, 3000, dtype=np.int16).tobytes()
         refine, reason = self.listener._should_refine(
-            RecognitionResult("валера команда відкрий браузер", 0.9, "vosk"),
+            RecognitionResult("рейвен команда відкрий браузер", 0.9, "vosk"),
             samples,
             16_000,
         )

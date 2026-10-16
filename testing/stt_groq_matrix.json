@@ -1,0 +1,6 @@
+{
+  "candidates": [
+    {"id": "groq-turbo", "backend": "groq", "model": "whisper-large-v3-turbo", "profile": "balanced"},
+    {"id": "groq-quality", "backend": "groq", "model": "whisper-large-v3", "profile": "balanced"}
+  ]
+}

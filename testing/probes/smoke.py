@@ -61,7 +61,7 @@ async def _run(args, cleanup):
                 started = time.perf_counter()
                 await speaker.prepare()
                 report("tts-prepare", seconds=round(time.perf_counter() - started, 3))
-            with tempfile.TemporaryDirectory(prefix="valera-smoke-") as directory:
+            with tempfile.TemporaryDirectory(prefix="raven-smoke-") as directory:
                 path = Path(directory) / "sample.wav"
                 phrase = "Команда, знайди погоду в місті Луцьк."
                 started = time.perf_counter()

@@ -18,6 +18,21 @@ from testing.probes.performance import summarize_turns
 
 
 class TurnTests(unittest.TestCase):
+    def test_numeric_gemini_diagnostics_survive_secret_filter(self):
+        from services.llm.timing import RequestTiming
+        from core.logging_setup import RedactingFilter
+        timing = RequestTiming([{'content': 'private fixture text'}])
+        timing.observe(SimpleNamespace(usage_metadata=SimpleNamespace(
+            prompt_token_count=42, candidates_token_count=8, thoughts_token_count=0)))
+        with self.assertLogs('services.llm.timing', level='INFO') as logs:
+            timing.finish('ok')
+        record = logs.records[0]
+        RedactingFilter().filter(record)
+        self.assertIn('prompt_units', record.getMessage())
+        self.assertIn('42', record.getMessage())
+        self.assertNotIn('REDACTED', record.getMessage())
+        self.assertNotIn('private fixture text', record.getMessage())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

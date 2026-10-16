@@ -27,7 +27,7 @@ async def measure_sample(speaker, worker, perf, directory):
     with perf.span("sample.tts_to_wav"):
         await asyncio.to_thread(
             speaker._generate_with_windows_speech,
-            "Привіт, Валера. Розкажи коротку цікаву історію про подорож.",
+            "Привіт, Рейвен. Розкажи коротку цікаву історію про подорож.",
             path,
         )
     with wave.open(str(path), "rb") as audio:
@@ -61,7 +61,7 @@ async def main(args):
     output = settings.paths.logs_dir / ("performance-" + time.strftime("%Y%m%d-%H%M%S") + ".jsonl")
     perf = PerformanceRecorder(MetricsCollector(output))
     with perf.span("startup.app_imports"):
-        from core.app import ValleRaApp
+        from core.app import RavenApp
         from services.apps.indexer import ApplicationIndexer
         from services.llm.manager import LLMManager
         from core.listen import VoskListener
@@ -91,8 +91,8 @@ async def main(args):
             llm.performance = perf
     scrub_sensitive_environment()
 
-    with tempfile.TemporaryDirectory(prefix="valera-perf-") as temporary:
-        app = object.__new__(ValleRaApp)
+    with tempfile.TemporaryDirectory(prefix="raven-perf-") as temporary:
+        app = object.__new__(RavenApp)
         app.settings, app.listener, app.speaker, app.performance = settings, listener, speaker, perf
         indexer = ApplicationIndexer(Path(temporary) / "applications.json", settings.application_aliases)
         jobs = {

@@ -48,12 +48,16 @@ def resolve_profile(settings, capabilities=None):
     # Explicit old config is preserved, never inferred as an automatic fallback.
     if settings.stt_backend != 'auto':
         values['backend'] = settings.stt_backend
-    if legacy == 'low_resource' and settings.stt_backend != 'vosk':
+    if legacy == 'low_resource' and settings.stt_backend not in {'vosk', 'groq'}:
         values['backend'], values['model'] = 'faster-whisper', settings.stt_low_resource_model
     elif legacy == 'balanced' and not settings.stt_profiles:
         values['model'] = 'large-v3-turbo'
     if settings.stt_backend == 'vosk':
         values['model'] = settings.stt_model_path
+    if settings.stt_backend == 'groq':
+        values['model'] = settings.stt_groq_model
+    if values['backend'] == 'groq':
+        return STTProfile(name, 'groq', values['model'], 'cloud', 'remote', 0, 1.0), caps
     device = settings.stt_primary_device if settings.stt_primary_device != 'auto' else values['device']
     if name in {'balanced', 'edge'}:
         device = 'cpu'

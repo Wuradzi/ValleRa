@@ -19,7 +19,7 @@ class ConsoleArgumentParser(argparse.ArgumentParser):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = ConsoleArgumentParser(description="ValleRa Voice Assistant")
+    parser = ConsoleArgumentParser(description="Raven Voice Assistant")
     maintenance = parser.add_mutually_exclusive_group()
     for command in ('doctor', 'diagnostics', 'audio-test', 'models', 'smoke-live'):
         maintenance.add_argument('--' + command, action='store_true')
@@ -43,7 +43,7 @@ def unlock_vault(settings) -> SecretStore:
         return vault
 
     for attempt in range(3):
-        password = console_getpass("Майстер-пароль ValleRa: ")
+        password = console_getpass("Майстер-пароль Raven: ")
         if vault.unlock_with_password(password):
             print("[SECURITY] Сховище секретів розблоковано.")
             return vault
@@ -79,7 +79,7 @@ async def async_main(args=None) -> int:
     configure_logging(settings)
     instance = SingleInstance(settings.paths.data_dir / "valera.lock")
     if not instance.acquire():
-        console_print("ValleRa вже запущена.")
+        console_print("Raven вже запущений.")
         return 2
 
     try:
@@ -91,9 +91,9 @@ async def async_main(args=None) -> int:
         performance = PerformanceRecorder(MetricsCollector(settings.paths.data_dir / "metrics.jsonl"))
         logging.getLogger("session.lifecycle").info("Performance run_id=%s", performance.run_id)
         with performance.span("startup.app_imports"):
-            from core.app import ValleRaApp
+            from core.app import RavenApp
         with performance.span("startup.app_construct"):
-            app = ValleRaApp(settings, vault, text_only=args.text_only, performance=performance)
+            app = RavenApp(settings, vault, text_only=args.text_only, performance=performance)
         try:
             if args.web_ui:
                 from core.web_ui import LocalWebUI
@@ -143,17 +143,17 @@ def main() -> int:
                 exit_code = asyncio.run(async_main(args))
             except KeyboardInterrupt:
                 logging.getLogger("session.lifecycle").info("Shutdown requested: Ctrl+C")
-                console_print("\nValleRa завершено.")
+                console_print("\nRaven завершено.")
                 return 0
             logging.getLogger("session.lifecycle").info("Application exit code: %s", exit_code)
             return exit_code
     except KeyboardInterrupt:
-        console_print("\nValleRa завершено.")
+        console_print("\nRaven завершено.")
         return 0
     except Exception:
         # The context logged the traceback; do not dump it into the dialogue.
         if session.path.exists():
-            console_print(f"ValleRa зупинено через помилку. Подробиці: {session.path}")
+            console_print(f"Raven зупинено через помилку. Подробиці: {session.path}")
         else:
             console_print("Не вдалося створити журнал сесії. Перевірте доступ до logs/sessions і вільне місце.")
         return 1

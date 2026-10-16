@@ -33,7 +33,7 @@ class SilentAudioError(RuntimeError):
 
 class VoskListener:
     FAST_CHAT = re.compile(
-        r"^(?:валера[\s,]+)?(?:привіт|здорово|дякую|дякую тобі|як справи|"
+        r"^(?:рейвен[\s,]+)?(?:привіт|здорово|дякую|дякую тобі|як справи|"
         r"як твої справи|так|ні|добре|гаразд|зрозуміло|до побачення)[.!?]*$",
         re.IGNORECASE,
     )
@@ -126,8 +126,7 @@ class VoskListener:
                 timing = result.timing
                 fragmented = result.fragmented
                 incomplete = result.incomplete
-                utterance_incomplete = (result.utterance_incomplete if result.utterance_incomplete is not None
-                                        else result.incomplete)
+                utterance_incomplete = result.resolved_utterance_incomplete
                 recognition_unreliable = result.recognition_unreliable
                 truncated = result.capture_truncated
                 selective = getattr(self.settings, 'stt_selective_whisper_enabled', False)
@@ -274,6 +273,9 @@ class VoskListener:
                     else None)
         segments = []
         native_end = None
+        # Flush short replies after a pause, before the confirmation deadline.
+        # Partial text is an endpoint hint only; authorization uses FINAL text.
+        denial_endpoint = QuietEndpoint(sample_rate, 800) if confirmation_capture else None
 
         def combined(payload):
             parts = segments + ([payload] if payload.get('text', '').strip() else [])
@@ -354,6 +356,7 @@ class VoskListener:
             return parsed
 
         started = time.monotonic()
+        confirmation_partial_seen = False
         if self._paused.is_set():
             return RecognitionResult("", 0.0, "interrupted"), b""
         with suppress_native_stderr(), sd.RawInputStream(
@@ -366,6 +369,9 @@ class VoskListener:
         ), self._capture_state():
             while time.monotonic() - started < timeout_seconds:
                 if self._interrupt.is_set() or self._paused.is_set():
+                    if confirmation_capture:
+                        logger.info('confirmation_capture_end reason=interrupted speech_observed=%s partial_seen=%s audio_ms=%s',
+                                    speech_observed, confirmation_partial_seen, round(len(captured) * 500 / sample_rate))
                     log_fragment_resolution('cancelled')
                     return RecognitionResult("", 0.0, "interrupted"), bytes(captured)
                 if endpoint is not None and endpoint.wait_expired(time.monotonic()):
@@ -379,6 +385,8 @@ class VoskListener:
                 captured.extend(data)
                 if endpoint is not None:
                     endpoint.feed(data)
+                if denial_endpoint is not None:
+                    denial_endpoint.feed(data)
                 samples = np.frombuffer(data, dtype=np.int16)
                 if samples.size:
                     observed_peak = max(
@@ -411,6 +419,25 @@ class VoskListener:
                         partial = ''
                     else:
                         partial = ''
+                elif denial_endpoint is not None:
+                    partial = json.loads(recognizer.PartialResult()).get('partial', '')
+                    confirmation_partial_seen |= bool(partial.strip())
+                    if partial != denial_endpoint.partial:
+                        denial_endpoint.partial = partial
+                        denial_endpoint.changed_at = denial_endpoint.consumed
+                    stable = denial_endpoint.consumed - denial_endpoint.changed_at >= sample_rate * .5
+                    quiet = denial_endpoint.processed - denial_endpoint.last_active >= sample_rate * .8
+                    if (speech_observed and stable and quiet and audio_queue.empty() and partial.strip()):
+                        payload = json.loads(recognizer.FinalResult())
+                        parsed = self._parse(payload)
+                        decision = ConfirmationService._decision(parsed.text, parsed.confidence)
+                        logger.info('confirmation_quiet_flush semantic=%s silence_ms=800',
+                                    'confirm' if decision is True else 'deny' if decision is False else 'unknown')
+                        # A negative partial changing into a positive final is
+                        # ambiguous: never turn that conflict into permission.
+                        if ConfirmationService._decision(partial) is False and decision is True:
+                            return RecognitionResult('', 0.0, 'vosk'), bytes(captured)
+                        return finish(payload, 'confirmation_quiet'), bytes(captured)
                 elif endpoint is not None:
                     partial = json.loads(recognizer.PartialResult()).get("partial", "")
                 else:
@@ -434,6 +461,9 @@ class VoskListener:
                         return finish(result, "native" if native_end is not None else "quiet"), bytes(captured)
 
         final_payload = combined(json.loads(recognizer.FinalResult()))
+        if confirmation_capture:
+            logger.info('confirmation_capture_end reason=timeout speech_observed=%s partial_seen=%s audio_ms=%s',
+                        speech_observed, confirmation_partial_seen, round(len(captured) * 500 / sample_rate))
         parsed = self._parse(final_payload)
         if parsed.text and not speech_observed:
             logger.debug(

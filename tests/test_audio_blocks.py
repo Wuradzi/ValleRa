@@ -46,6 +46,66 @@ class EnergyGateTests(unittest.TestCase):
 
 
 class AudioBlockTests(unittest.TestCase):
+    def test_confirmation_quiet_flush_uses_final_not_partial(self):
+        from core.confirmation import ConfirmationService
+        cases = [('так', 'так', .95, True), ('так', 'так', .61, None),
+                 ('відміна', 'відміна', .61, False), ('так', 'відміна', .95, False),
+                 ('так', 'невідомо', .99, None), ('<UNK>', 'так', .61, None)]
+        for partial, final, confidence, expected in cases:
+            with self.subTest(partial=partial, final=final, confidence=confidence), tempfile.TemporaryDirectory() as directory:
+                listener = VoskListener(Settings(ProjectPaths.from_root(Path(directory))))
+                listener._get_model = Mock(return_value=SimpleNamespace(vosk_model_find_word=lambda _: -1))
+                recognizer = Mock()
+                recognizer.AcceptWaveform.return_value = False
+                recognizer.PartialResult.return_value = json.dumps({'partial': partial})
+                recognizer.FinalResult.return_value = json.dumps(
+                    {'text': final, 'result': [{'word': final, 'conf': confidence}]})
+                chunks = [np.concatenate([np.full(1280, 500), np.zeros(2720)]).astype(np.int16).tobytes()]
+                chunks += [b'\0\0' * 4000] * 4
+
+                def stream(**kwargs):
+                    for raw in chunks:
+                        kwargs['callback'](raw, 4000, None, None)
+                    return contextlib.nullcontext()
+
+                with patch('vosk.KaldiRecognizer', return_value=recognizer), patch(
+                    'core.listen.suppress_native_stderr', contextlib.nullcontext):
+                    result, _ = listener._listen_on_device(SimpleNamespace(RawInputStream=stream),
+                                                          0, 16000, 8, ConfirmationService.GRAMMAR)
+                self.assertEqual(result.text, final)
+                self.assertIs(ConfirmationService._decision(result.text, result.confidence), expected)
+                recognizer.FinalResult.assert_called_once()
+                listener.whisper.close()
+
+    def test_confirmation_partial_denial_requires_reliable_final_denial(self):
+        from core.confirmation import ConfirmationService
+        for final, confidence, expected in [('ні', .95, 'ні'), ('скасуй', .95, 'скасуй'),
+                                             ('ні', .5, 'ні'), ('так', .99, ''), ('', 0, '')]:
+            with self.subTest(final=final, confidence=confidence), tempfile.TemporaryDirectory() as directory:
+                listener = VoskListener(Settings(ProjectPaths.from_root(Path(directory))))
+                listener._get_model = Mock(return_value=SimpleNamespace(vosk_model_find_word=lambda _: -1))
+                recognizer = Mock()
+                recognizer.AcceptWaveform.return_value = False
+                recognizer.PartialResult.return_value = json.dumps({'partial': 'ні'})
+                recognizer.FinalResult.return_value = json.dumps(
+                    {'text': final, 'result': [{'word': final, 'conf': confidence}]})
+                # Just 80 ms speech; no 300 ms general-turn minimum imposed.
+                chunks = [np.concatenate([np.full(1280, 500), np.zeros(2720)]).astype(np.int16).tobytes()]
+                chunks += [b'\0\0' * 4000] * 4
+
+                def stream(**kwargs):
+                    for raw in chunks:
+                        kwargs['callback'](raw, 4000, None, None)
+                    return contextlib.nullcontext()
+
+                with patch('vosk.KaldiRecognizer', return_value=recognizer), patch(
+                    'core.listen.suppress_native_stderr', contextlib.nullcontext):
+                    result, _ = listener._listen_on_device(SimpleNamespace(RawInputStream=stream),
+                                                          0, 16000, 8, ConfirmationService.GRAMMAR)
+                self.assertEqual(result.text, expected)
+                self.assertIsNot(ConfirmationService._decision(result.text, result.confidence), True)
+                recognizer.FinalResult.assert_called_once()
+
     def test_confirmation_grammar_keeps_ukrainian_no_and_model_unknown(self):
         from core.confirmation import ConfirmationService
         model = SimpleNamespace(vosk_model_find_word=lambda word: 3 if word == '<UNK>' else -1)
@@ -136,12 +196,12 @@ class AudioBlockTests(unittest.TestCase):
             recognizer = Mock()
             recognizer.AcceptWaveform.return_value = False
             recognizer.PartialResult.return_value = json.dumps({'partial': 'привіт'})
-            recognizer.FinalResult.return_value = json.dumps({'text': 'привіт валера', 'result': []})
+            recognizer.FinalResult.return_value = json.dumps({'text': 'привіт рейвен', 'result': []})
             pcm = b'\x00\x10' * 8000 + b'\0\0' * 32000
             with patch('vosk.KaldiRecognizer', return_value=recognizer), self.assertLogs('core.listen', level='DEBUG') as logs:
                 result, captured = replay(listener, pcm, 16000)
             self.assertTrue(any('kind=quiet' in line for line in logs.output))
-            self.assertEqual(result.text, 'привіт валера')
+            self.assertEqual(result.text, 'привіт рейвен')
             self.assertEqual(captured, pcm[:48000])  # .5 s speech + 1 s pause (250 ms blocks)
             recognizer.FinalResult.assert_called_once()
             listener.close()

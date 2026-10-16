@@ -104,3 +104,7 @@ body.motion-off :is(.features, .mouth-rest, .mouth-wave, .mouth-echo), body.tab-
 }
 @media (max-width: 520px) { body { padding: 72px 12px 20px; } .workspace { min-height: 410px; border-radius: 22px; } .presence { padding: 78px 16px 12px; } h1 { font-size: 18px; } .conversation { padding: 0 12px 12px; } .message { max-width: 96%; padding: 11px 12px; } .message.user { max-width: 90%; } }
 @media (max-height: 560px) and (min-width: 521px) { body { padding-top: 76px; padding-bottom: 24px; } }
+/* STT selection is deliberately restart-scoped, not a microphone hot swap. */
+.stt-setting { margin: 1rem 0; padding: 1rem; border: 1px solid #555; border-radius: 12px; }
+.stt-setting select { display: block; width: 100%; margin: .5rem 0; padding: .6rem; color: #eee; background: #252830; border: 1px solid #777; border-radius: 8px; }
+.stt-setting button { margin-top: .7rem; }

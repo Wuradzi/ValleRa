@@ -58,6 +58,8 @@ def models(settings):
     rows = []
     for name in ('quality', 'balanced', 'edge'):
         profile, _ = resolve_profile(replace(settings, stt_profile=name, stt_quality_profile=None))
+        if profile.backend == 'groq':
+            continue  # Remote model: no local files or CUDA requirement.
         for role, model in (('primary', profile.model), ('escalation', profile.escalation_model)):
             if not model:
                 continue
@@ -111,7 +113,8 @@ def doctor(root, *, probe_audio=False, test_tts=True):
         rows.append(check(f"Model {model['profile']} {model['role']}", 'PASS' if model['present'] else ('FAIL' if required else 'WARN'),
                           'cached' if model['present'] else 'not cached; no download'))
     profile, _ = resolve_profile(settings, caps)
-    rows.append(check('STT runtime', 'PASS' if find_spec(profile.backend.replace('-', '_')) else 'FAIL', profile.backend))
+    runtime_module = 'httpx' if profile.backend == 'groq' else profile.backend.replace('-', '_')
+    rows.append(check('STT runtime', 'PASS' if find_spec(runtime_module) else 'FAIL', profile.backend))
     rows.append(check('CUDA', 'PASS' if caps.cuda else 'WARN', 'available' if caps.cuda else 'unavailable; CPU profiles supported'))
     versions = runtime_versions()
     stt = dict(profile={k: v for k, v in asdict(profile).items() if k not in {'hotwords', 'initial_prompt'}}, versions=versions, cuda=caps.cuda,
@@ -125,6 +128,11 @@ def doctor(root, *, probe_audio=False, test_tts=True):
     # Presence only, never unlock the vault or issue healthcheck requests.
     from dotenv import dotenv_values
     keys = dotenv_values(settings.paths.env_file) if settings.paths.env_file.exists() else {}
+    selected = profile.backend == 'groq'
+    groq_present = bool(settings.api_keys.get('groq') or os.environ.get('GROQ_API_KEY') or keys.get('GROQ_API_KEY'))
+    rows.append(check('Groq STT', 'PASS' if not selected or groq_present else 'WARN',
+                      'CONFIGURED' if selected and groq_present else 'MISSING_KEY' if selected else 'NOT_SELECTED',
+                      live='LIVE_NOT_TESTED', confidence_available=False))
     for provider in settings.llm_order:
         key = f'{provider.upper()}_API_KEY'
         present = bool(os.environ.get(key) or keys.get(key)) if provider != 'ollama' else bool(settings.llm_models.get(provider))

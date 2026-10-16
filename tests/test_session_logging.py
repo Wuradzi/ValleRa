@@ -64,14 +64,14 @@ class SessionLoggingTests(unittest.TestCase):
             PerformanceRecorder().record("unit.stage", 12)
             logging.getLogger("test.session").warning("background warning")
             sys.stderr.write("stderr diagnostic\n")
-            console_print("ValleRa: Привіт!")
+            console_print("Raven: Привіт!")
             with patch("builtins.input", return_value="Команда: допомога"):
                 self.assertEqual(console_input("> "), "Команда: допомога")
         journal = session.path.read_text(encoding="utf-8")
-        self.assertEqual(terminal.getvalue(), "ValleRa: Привіт!\n> ")
+        self.assertEqual(terminal.getvalue(), "Raven: Привіт!\n> ")
         self.assertEqual(errors.getvalue(), "")
         for marker in ("[LLM] connected", "[PERF] unit.stage", "background warning",
-                       "stderr diagnostic", "ValleRa: Привіт!", "[TEXT] Команда: допомога",
+                       "stderr diagnostic", "Raven: Привіт!", "[TEXT] Команда: допомога",
                        "Session started", "Session finished"):
             self.assertIn(marker, journal)
 
@@ -156,7 +156,7 @@ class SessionLoggingTests(unittest.TestCase):
             print("unexpected private-value-ABC")
             print("пароль від пошти це мій-тестовий-пароль")
             print("GEMINI_API_KEY=fake-key-123")
-            console_print("ValleRa: private-value-ABC")
+            console_print("Raven: private-value-ABC")
             try:
                 raise ValueError("private-value-ABC; token=token-fixture; Bearer bearer-fixture")
             except ValueError:
@@ -265,7 +265,7 @@ class SessionLoggingTests(unittest.TestCase):
                 worker.close()
         journal = session.path.read_text(encoding="utf-8")
         self.assertIn("[STT] fixture Whisper ready", journal)
-        self.assertIn("valera-whisper", journal)
+        self.assertIn("raven-whisper", journal)
 
     def test_creation_failure_leaves_console_and_handlers_intact(self):
         stdout, stderr = sys.stdout, sys.stderr
@@ -326,5 +326,5 @@ class MainSessionTests(unittest.TestCase):
 
         result, terminal, journal = self.run_main(app)
         self.assertEqual(result, 0)
-        self.assertIn("ValleRa завершено", terminal)
+        self.assertIn("Raven завершено", terminal)
         self.assertIn("Shutdown requested: Ctrl+C", journal)

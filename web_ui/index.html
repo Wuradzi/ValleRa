@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>ValleRa — простір розмови</title>
+  <title>Raven — простір розмови</title>
   <link rel="icon" href="/avatar.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
@@ -64,8 +64,17 @@
     <div class="dialog-heading"><h2>Поточна сесія</h2><button id="close-about" aria-label="Закрити">×</button></div>
     <div class="session-status"><span>Модель: <strong id="provider">—</strong></span><span id="connection">Підключення</span></div>
     <button id="pause" disabled>Ⅱ Пауза розмови</button>
-    <p>Можна просити звичайними словами — Валера уточнить і запропонує підтвердити дію. «Команда: …» — резервний явний формат. Enter — надіслати, Shift + Enter — новий рядок.</p>
-    <p>Мікрофон і голос обробляє ValleRa, а не браузер. Текст розмови передається налаштованому LLM-провайдеру. Під час озвучення слухання призупинене.</p>
+    <fieldset class="stt-setting">
+      <legend>Розпізнавання голосу</legend>
+      <label for="stt-backend">Джерело STT після перезапуску</label>
+      <select id="stt-backend"><option value="local">Локальна модель · автоматичний профіль</option><option value="groq">Groq · хмарна модель</option></select>
+      <p id="stt-status" role="status">Очікування стану STT.</p>
+      <p>Groq передає голосові репліки до api.groq.com і витрачає API-квоту. Потрібен GROQ_API_KEY. Відкриття програм, пошук файлів, погода та вебпошук доступні після підтвердження конкретної дії (за ввімкнених природних дій). Підтвердження — через UI або локальний Vosk. Інші дії вводьте текстом.</p>
+      <label><input id="stt-cloud-consent" type="checkbox"> Дозволяю передачу голосових реплік до Groq після перезапуску.</label>
+      <button id="stt-save" type="button" disabled>Зберегти вибір STT</button>
+    </fieldset>
+    <p>Можна просити звичайними словами — Рейвен уточнить і запропонує підтвердити дію. «Команда: …» — резервний явний формат. Enter — надіслати, Shift + Enter — новий рядок.</p>
+    <p>Мікрофон і голос обробляє Raven, а не браузер. Текст розмови передається налаштованому LLM-провайдеру. Під час озвучення слухання призупинене.</p>
     <p>Центральна кнопка зупиняє відповідь, не призупиняє її для продовження й не скасовує локальні дії. «Пауза розмови» не вимикає мікрофон — для цього є окрема кнопка.</p>
     <p>Закриття вкладки не завершує застосунок і не вимикає мікрофон. Історія цього вікна обмежена сесією; звичайні журнали зберігаються як раніше. Не надсилай секрети в чат.</p>
     <label class="motion-setting"><input id="motion" type="checkbox" checked> Пульсація світла під час мовлення</label>

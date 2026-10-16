@@ -58,6 +58,7 @@ htmlcov/
 !/docs/ADDING_SKILLS.md
 !/docs/ARCHITECTURE.md
 !/docs/STT_BACKENDS.md
+!/docs/GROQ_STT.md
 !/docs/TECHNICAL_SPECIFICATION.md
 !/docs/PUBLICATION.md
 !/docs/DEVELOPER_VALIDATION.md

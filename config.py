@@ -48,11 +48,13 @@ class ProjectPaths:
 class Settings:
     paths: ProjectPaths
     language: str = "uk"
-    assistant_name: str = "Валера"
+    assistant_name: str = "Рейвен"
     confirmation_timeout_seconds: int = 15
     fuzzy_threshold: int = 85
     stt_model_path: str = "models/vosk-model-small-uk-v3-small"
     stt_backend: str = "auto"
+    stt_groq_model: str = "whisper-large-v3-turbo"
+    stt_groq_timeout_seconds: int = 15
     stt_profile: str = "auto"
     stt_profiles: dict = field(default_factory=dict)
     stt_quality_profile: str | None = None  # Legacy input, not new configuration.
@@ -63,6 +65,7 @@ class Settings:
     stt_primary_timeout_ms: int = 60000
     stt_pcm_short_silence_ms: int = 700
     stt_pcm_long_silence_ms: int = 1600
+    stt_utterance_max_seconds: int = 45
     stt_sample_rate: int = 16000
     stt_audio_block_ms: int = 250
     stt_endpoint_silence_ms: int = 0
@@ -141,11 +144,13 @@ def default_config(*, fresh: bool = True) -> dict[str, Any]:
         "config_version": 2,
         "performance": {"profile": performance_profile},
         "language": "uk",
-        "assistant_name": "Валера",
+        "assistant_name": "Рейвен",
         "confirmation_timeout_seconds": 15,
         "fuzzy_threshold": 85,
         "stt": {
             "backend": "auto",
+            "groq_model": "whisper-large-v3-turbo",
+            "groq_timeout_seconds": 15,
             "profile": "auto",
             "profiles": default_profiles(),
             "quality_profile": None,
@@ -156,6 +161,7 @@ def default_config(*, fresh: bool = True) -> dict[str, Any]:
             "primary_timeout_ms": 60000,
             "pcm_short_silence_ms": 700,
             "pcm_long_silence_ms": 1600,
+            "utterance_max_seconds": 45,
             "model_path": "models/vosk-model-small-uk-v3-small",
             "sample_rate": 16000,
             "audio_block_ms": 250,
@@ -262,6 +268,9 @@ def merge_config(custom: dict[str, Any]) -> dict[str, Any]:
 def migrate_config(custom):
     """In-memory only; unknown user fields survive, source file is untouched."""
     result = copy.deepcopy(custom)
+    # Upgrade only the former default identity; preserve custom names and disk data.
+    if str(result.get('assistant_name', '')).strip().casefold() in {'валера', 'vallera', 'valera'}:
+        result['assistant_name'] = 'Рейвен'
     version = result.get('config_version', 1)
     if type(version) is not int or version not in (1, 2):
         raise ConfigError('Unsupported config_version')
@@ -306,8 +315,12 @@ def validate_config(config: dict[str, Any]) -> None:
         if config.get('config_version', 2) != 2:
             raise ConfigError('Unsupported config_version')
         stt = config['stt']
-        if stt['backend'] not in {'auto', 'faster-whisper', 'sherpa-onnx', 'vosk'}:
+        if stt['backend'] not in {'auto', 'faster-whisper', 'sherpa-onnx', 'vosk', 'groq'}:
             raise ConfigError('Invalid stt.backend')
+        if stt['groq_model'] not in {'whisper-large-v3-turbo', 'whisper-large-v3'}:
+            raise ConfigError('Invalid stt.groq_model')
+        if type(stt['groq_timeout_seconds']) is not int or not 1 <= stt['groq_timeout_seconds'] <= 120:
+            raise ConfigError('stt.groq_timeout_seconds must be 1..120')
         if stt['profile'] not in {'auto', 'quality', 'balanced', 'edge', 'low_resource'}:
             raise ConfigError('Invalid stt.profile')
         if stt.get('quality_profile') not in {None, 'quality', 'balanced', 'edge', 'low_resource'}:
@@ -320,8 +333,10 @@ def validate_config(config: dict[str, Any]) -> None:
                     'target_ram_mb', 'target_rtf', 'hotwords', 'initial_prompt',
                     'escalation_model', 'escalation_confidence'}:
                 raise ConfigError('Invalid STT profile fields')
-            if item['backend'] not in {'faster-whisper', 'sherpa-onnx', 'vosk'}:
+            if item['backend'] not in {'faster-whisper', 'sherpa-onnx', 'vosk', 'groq'}:
                 raise ConfigError('Invalid profile backend')
+            if item['backend'] == 'groq' and item['model'] not in {'whisper-large-v3-turbo', 'whisper-large-v3'}:
+                raise ConfigError('Invalid Groq profile model')
             if not isinstance(item['model'], str) or not item['model'].strip():
                 raise ConfigError('Profile model is required')
             if item['device'] not in {'auto', 'cpu', 'cuda'} or (name != 'quality' and item['device'] != 'cpu'):
@@ -347,6 +362,8 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ConfigError('stt.fallback_backend: none або vosk')
         if type(stt['primary_local_files_only']) is not bool:
             raise ConfigError('stt.primary_local_files_only має бути boolean')
+        if type(stt['utterance_max_seconds']) is not int or not 15 <= stt['utterance_max_seconds'] <= 60:
+            raise ConfigError('stt.utterance_max_seconds має бути 15..60')
         if type(stt['primary_timeout_ms']) is not int or not 1000 <= stt['primary_timeout_ms'] <= 300000:
             raise ConfigError('stt.primary_timeout_ms має бути 1000..300000')
         if not isinstance(stt['low_resource_model'], str) or not stt['low_resource_model'].strip():
@@ -469,6 +486,8 @@ def load_settings(profile_override: str | None = None, *, read_only=False, root=
         fuzzy_threshold=int(config["fuzzy_threshold"]),
         stt_model_path=config["stt"]["model_path"],
         stt_backend=config['stt']['backend'],
+        stt_groq_model=config['stt']['groq_model'],
+        stt_groq_timeout_seconds=config['stt']['groq_timeout_seconds'],
         stt_profile=config['stt']['profile'],
         stt_profiles=config['stt']['profiles'],
         stt_quality_profile=config['stt']['quality_profile'],
@@ -479,6 +498,7 @@ def load_settings(profile_override: str | None = None, *, read_only=False, root=
         stt_primary_timeout_ms=config['stt']['primary_timeout_ms'],
         stt_pcm_short_silence_ms=config['stt']['pcm_short_silence_ms'],
         stt_pcm_long_silence_ms=config['stt']['pcm_long_silence_ms'],
+        stt_utterance_max_seconds=config['stt']['utterance_max_seconds'],
         stt_sample_rate=int(config["stt"]["sample_rate"]),
         stt_audio_block_ms=int(config["stt"]["audio_block_ms"]),
         stt_endpoint_silence_ms=int(config["stt"]["endpoint_silence_ms"]),

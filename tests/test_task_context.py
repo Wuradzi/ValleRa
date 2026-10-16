@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from config import ProjectPaths, Settings
-from core.app import ValleRaApp
+from core.app import RavenApp
 from core.command_intent import CommandIntent
 from core.command_router import CommandRouter
 from core.models import CommandContext, SkillResult
@@ -204,7 +204,7 @@ class TaskIntegrationTests(unittest.IsolatedAsyncioTestCase):
             llm.chat.assert_not_awaited()
 
     async def test_voice_choice_uses_command_confidence_threshold(self):
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.web_ui = None
         app.running = True
         tasks = TaskContext()

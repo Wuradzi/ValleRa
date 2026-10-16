@@ -4,11 +4,13 @@
     "profile": "fast"
   },
   "language": "uk",
-  "assistant_name": "Валера",
+  "assistant_name": "Рейвен",
   "confirmation_timeout_seconds": 15,
   "fuzzy_threshold": 85,
   "stt": {
     "backend": "auto",
+    "groq_model": "whisper-large-v3-turbo",
+    "groq_timeout_seconds": 15,
     "profile": "auto",
     "profiles": {
       "quality": {"backend": "faster-whisper", "model": "large-v3", "device": "auto", "compute_type": "auto", "target_ram_mb": 8192, "target_rtf": 1.0},
@@ -22,6 +24,7 @@
     "primary_timeout_ms": 60000,
     "pcm_short_silence_ms": 700,
     "pcm_long_silence_ms": 1600,
+    "utterance_max_seconds": 45,
     "model_path": "models/vosk-model-small-uk-v3-small",
     "sample_rate": 16000,
     "audio_block_ms": 250,

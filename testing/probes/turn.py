@@ -108,7 +108,7 @@ async def run(args):
     listener = VoskListener(settings)
     listener.performance = listener.whisper.performance = perf
     listener.whisper.settings.benchmark_local_files_only = True
-    with tempfile.TemporaryDirectory(prefix="valera-turn-") as directory:
+    with tempfile.TemporaryDirectory(prefix="raven-turn-") as directory:
         paths = replace(settings.paths, cache_dir=Path(directory), data_dir=Path(directory))
         isolated = replace(settings, paths=paths)
         speaker = FileSpeaker(isolated)

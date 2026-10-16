@@ -75,7 +75,7 @@ def benchmark(backend, checkpoint=None, cancellation=False):
             report['reason'] = 'preparation_failed'
             raise RuntimeError('preparation_failed')
         monitor.inference()
-        with tempfile.TemporaryDirectory(prefix='valera-tts-benchmark-') as directory:
+        with tempfile.TemporaryDirectory(prefix='raven-tts-benchmark-') as directory:
             for index, text in enumerate(PHRASES):
                 path = Path(directory) / f'{index}.wav'
                 started = time.perf_counter()
@@ -126,7 +126,7 @@ def _worker(connection, checkpoint, mode, cancellation):
 
 def run(args):
     context = multiprocessing.get_context('spawn')
-    with tempfile.TemporaryDirectory(prefix='valera-tts-resources-') as directory:
+    with tempfile.TemporaryDirectory(prefix='raven-tts-resources-') as directory:
         checkpoint = Path(directory) / 'resources.json'
         parent, child = context.Pipe(duplex=False)
         worker = context.Process(target=_worker, args=(child, checkpoint, args.fake_mode, args.cancellation))

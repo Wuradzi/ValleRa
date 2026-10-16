@@ -148,7 +148,7 @@ def acceptance_matches(text, tool):
     if '?' in value or any(c in value for c in '"«»“”`{}'):
         return False
     value = value.strip(' .!,')
-    value = re.sub(r'^(?:валера|валеро)[, ]+', '', value)
+    value = re.sub(r'^(?:рейвен|рейвене|raven)[, ]+', '', value)
     value = re.sub(r'^(?:будь ласка[, ]+)', '', value)
     value = re.sub(r'[, ]+будь ласка$', '', value)
     if value in {'так', 'давай', 'гаразд', 'добре', 'згоден', 'згодна', 'зроби це', 'так зроби', 'давай зробимо'}:

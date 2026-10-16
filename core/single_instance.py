@@ -105,7 +105,7 @@ class SingleInstance:
         except (OSError, UnicodeError):
             return None
 
-        # Compatibility with lock files written by older ValleRa versions.
+        # Compatibility with lock files written by older Raven versions.
         try:
             return {"pid": int(raw)}
         except ValueError:

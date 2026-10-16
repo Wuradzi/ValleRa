@@ -28,7 +28,12 @@ const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 // Explicit app-only light preference; never changes the operating system setting.
 for (const id of ["motion", "allow-pulse-motion"]) {
   try {
-    const saved = localStorage.getItem("valera-light-" + id);
+    let saved = localStorage.getItem("raven-light-" + id);
+    // Preserve only display preferences from installations before the rename.
+    if (saved === null) {
+      saved = localStorage.getItem("valera-light-" + id);
+      if (saved !== null) localStorage.setItem("raven-light-" + id, saved);
+    }
     if (saved !== null) $(id).checked = saved === "true";
   } catch { /* Preferences still work for this page when storage is unavailable. */ }
 }
@@ -39,8 +44,8 @@ function pulseMotionBlocked() { return reducedMotion.matches && !$("allow-pulse-
 const fragment = new URLSearchParams(location.hash.slice(1));
 let token = fragment.get("token") || "";
 try {
-  if (token) sessionStorage.setItem("valera-session", token);
-  else token = sessionStorage.getItem("valera-session") || "";
+  if (token) sessionStorage.setItem("raven-session", token);
+  else token = sessionStorage.getItem("raven-session") || "";
 } catch { /* A privacy setting may disable storage; the current tab still works. */ }
 if (location.hash) history.replaceState(null, "", location.pathname);
 
@@ -61,16 +66,16 @@ function banner(text) { $("banner").textContent = text; $("banner").hidden = !te
 function describeLight() {
   let detail;
   if (!$("motion").checked) detail = "Пульсацію вимкнено перемикачем вище.";
-  else if (pulseMotionBlocked()) detail = "Система просить зменшити рух: пульсацію вимкнено. Окремий дозвіл вище вмикає її лише для ValleRa.";
+  else if (pulseMotionBlocked()) detail = "Система просить зменшити рух: пульсацію вимкнено. Окремий дозвіл вище вмикає її лише для Raven.";
   else if (document.hidden) detail = "Вкладку приховано — світлові ефекти призупинені.";
   else if (lightPreview) detail = "Зразок форми хвилі: демонстраційні дані, без голосу й API.";
-  else if (!connected) detail = "Немає зв’язку з ValleRa. Перевірка світла працює окремо.";
-  else if (typeof state?.tts_playback !== "boolean") detail = "Сервер не передає стан голосу. Перезапусти ValleRa й відкрий нове посилання сесії.";
+  else if (!connected) detail = "Немає зв’язку з Raven. Перевірка світла працює окремо.";
+  else if (typeof state?.tts_playback !== "boolean") detail = "Сервер не передає стан голосу. Перезапусти Raven й відкрий нове посилання сесії.";
   else if (document.body.dataset.playback !== "true") detail = "Очікування озвучення. У спокої обличчя статичне.";
   else if (document.body.dataset.glowMode !== "audio") detail = "Немає свіжих аудіоданих для хвилі. Рот залишається лінією; для цього виходу аналіз звуку може бути недоступний.";
   else detail = "Форма хвилі — з PCM голосу, яскравість — з рівня звуку. Отримано кадрів: " + (state?.tts_glow?.sequence ?? 0);
   if ($("motion").checked && reducedMotion.matches && !pulseMotionBlocked()) {
-    detail += " Світлові ефекти дозволено для ValleRa; налаштування системи не змінені.";
+    detail += " Світлові ефекти дозволено для Raven; налаштування системи не змінені.";
   }
   $("light-status").textContent = detail;
   $("preview-light").disabled = !$("motion").checked || pulseMotionBlocked();
@@ -142,7 +147,12 @@ function renderGlow(playing, pulse) {
     describeLight();
   }, Math.max(0, 300 - pulse.age_ms));
 }
+let sttInitialized = false;
+let sttSaving = false;
 function controls() {
+  $("stt-save").disabled = !connected || sttSaving ||
+    ($("stt-backend").value === "groq" && !$("stt-cloud-consent").checked);
+  $("stt-backend").disabled = !connected || sttSaving;
   for (const id of ["message", "stop", "new-chat"]) $(id).disabled = !connected;
   $("send").disabled = !connected || sending;
   $("message").disabled = !connected || sending;
@@ -177,6 +187,13 @@ function renderState(next) {
   $("status-detail").textContent = detail;
   $("status-detail").hidden = !["offline", "voice_error", "confirmation"].includes(phase);
   $("provider").textContent = state.provider;
+  if (!sttInitialized && state.stt_saved) {
+    $("stt-backend").value = state.stt_saved;
+    sttInitialized = true;
+  }
+  const sttLabels = {local: "Локальна модель", groq: "Groq", disabled: "Голос вимкнено"};
+  $("stt-status").textContent = `Зараз: ${sttLabels[state.stt_active] || "—"}. Збережено: ${sttLabels[state.stt_saved] || "—"}.` +
+    (state.stt_restart_required ? " Потрібен перезапуск Raven." : " Зміни застосовуються після перезапуску.");
   $("connection").classList.toggle("connected", connected);
   $("connection").replaceChildren(Object.assign(document.createElement("i")), document.createTextNode(connected ? "З’єднано" : "Немає зв’язку"));
   $("microphone").setAttribute("aria-pressed", String(!!state.microphone));
@@ -248,7 +265,7 @@ function appendEvent(event) {
       const block = document.createElement("article");
       block.className = "message " + event.kind;
       const label = document.createElement("div"); label.className = "label";
-      label.textContent = event.kind === "user" ? "ТИ" : "ВАЛЕРА";
+      label.textContent = event.kind === "user" ? "ТИ" : "РЕЙВЕН";
       if (event.source === "voice") { const source = document.createElement("small"); source.textContent = "розпізнано з голосу"; label.append(source); }
       const text = document.createElement("div"); text.className = "text"; text.textContent = event.text;
       block.append(label, text); messages.append(block);
@@ -348,6 +365,19 @@ $("message").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send($("message").value); }
 });
 $("microphone").addEventListener("click", () => action("microphone", {enabled: !state.microphone}));
+$("stt-backend").addEventListener("change", controls);
+$("stt-cloud-consent").addEventListener("change", controls);
+$("stt-save").addEventListener("click", async () => {
+  if (!connected || sttSaving) return;
+  sttSaving = true; controls();
+  try {
+    const result = await request("/api/action", {method: "POST", body: JSON.stringify({
+      action: "stt_backend", backend: $("stt-backend").value,
+      cloud_consent: $("stt-cloud-consent").checked})});
+    banner(result.message);
+  } catch (error) { banner(error.message); }
+  finally { sttSaving = false; controls(); }
+});
 $("stop").addEventListener("click", stopResponse);
 $("pause").addEventListener("click", () => action(state.paused ? "resume" : "pause"));
 $("new-chat").addEventListener("click", () => send("Команда: нова розмова"));
@@ -374,7 +404,7 @@ for (const id of ["motion", "allow-pulse-motion"]) {
   $(id).addEventListener("change", () => {
     document.body.classList.toggle("motion-off", !$("motion").checked);
     document.body.classList.toggle("allow-pulse-motion", $("allow-pulse-motion").checked);
-    try { localStorage.setItem("valera-light-" + id, String($(id).checked)); } catch { /* Page-local fallback. */ }
+    try { localStorage.setItem("raven-light-" + id, String($(id).checked)); } catch { /* Page-local fallback. */ }
     if ((!$("motion").checked || pulseMotionBlocked()) && lightPreview) endLightPreview();
     if (!$("motion").checked || pulseMotionBlocked()) resetWave();
     describeLight();
@@ -425,7 +455,7 @@ $("about").addEventListener("click", () => { describeLight(); $("about-dialog").
 $("close-about").addEventListener("click", () => $("about-dialog").close());
 async function poll() {
   if (!token) {
-    banner("Для підключення запусти main.py --web-ui та відкрий посилання з термінала. Ця сторінка без ключа сесії не керує Валерою.");
+    banner("Для підключення запусти main.py --web-ui та відкрий посилання з термінала. Ця сторінка без ключа сесії не керує Рейвеном.");
     renderState({status: "offline", provider: "—"}); return;
   }
   while (true) {
@@ -442,7 +472,7 @@ async function poll() {
     } catch (error) {
       connected = false;
       renderState(state || {status: "offline", provider: "—"});
-      banner("Зв’язок перервано. Мікрофон Валери міг залишитися ввімкненим. " + error.message);
+      banner("Зв’язок перервано. Мікрофон Рейвена міг залишитися ввімкненим. " + error.message);
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
     if (document.hidden) await new Promise((resolve) => setTimeout(resolve, 2500));

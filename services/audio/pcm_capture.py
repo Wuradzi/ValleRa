@@ -19,6 +19,20 @@ class CapturedAudio:
     speech_started_at: float | None = None
     capture_returned_at: float | None = None
     endpoint_reason: str = 'unknown'
+    active_audio_ms: float | None = None
+    speech_span_ms: float | None = None
+
+
+def sparse_activity(capture: CapturedAudio) -> bool:
+    """Conservative pre-upload guard, not linguistic VAD or a transcript filter.
+
+    Preserve short replies. Only reject long spans with very little detected
+    energy. Missing legacy evidence must not be interpreted as zero activity.
+    """
+    active = getattr(capture, 'active_audio_ms', None)
+    span = getattr(capture, 'speech_span_ms', None)
+    return (isinstance(active, (float, int)) and isinstance(span, (float, int))
+            and span >= 3000 and 0 <= active <= 500 and active / span <= .10)
 
 
 class AcousticEndpoint:
@@ -60,7 +74,7 @@ class AcousticEndpoint:
         return self.speech and self.processed - self.last_active >= self.rate * self.threshold_ms / 1000
 
 
-def capture_pcm(sd, device, rate, timeout, settings, cancelled, capture_state):
+def capture_pcm(sd, device, rate, timeout, settings, cancelled, capture_state, *, utterance_timeout=None):
     from core.suppress_stderr import suppress_native_stderr
     blocks = queue.Queue(maxsize=256)
     overflow = False
@@ -82,6 +96,7 @@ def capture_pcm(sd, device, rate, timeout, settings, cancelled, capture_state):
     last_at = None
     started = time.monotonic()
     deadline = started + timeout
+    speech_budget = timeout if utterance_timeout is None else utterance_timeout
     speech_deadline_set = False
     capture_started = time.perf_counter()
     endpoint_at = None
@@ -100,7 +115,8 @@ def capture_pcm(sd, device, rate, timeout, settings, cancelled, capture_state):
                 # Waiting for speech must not consume the utterance budget.
                 # Backdate to acoustic onset, not the later 250ms speech decision.
                 span = (endpoint.processed - endpoint.first_active) / rate
-                deadline = min(started + 2 * timeout, time.monotonic() + timeout - span)
+                deadline = min(started + timeout + speech_budget,
+                               time.monotonic() + speech_budget - span)
                 speech_deadline_set = True
             if endpoint.ready and blocks.empty():
                 truncated = False
@@ -123,9 +139,12 @@ def capture_pcm(sd, device, rate, timeout, settings, cancelled, capture_state):
         ((endpoint_at or end) - speech_end) * 1000 if speech_end is not None else None,
         reason, endpoint.threshold_ms,
         (speech_end - speech_started) * 1000 if speech_started is not None else 0,
-        endpoint.active / rate * 1000, overflow, timeout * 1000, timeout * 1000,
+        endpoint.active / rate * 1000, overflow, timeout * 1000, speech_budget * 1000,
         trim_samples / rate * 1000)
     # Preserve 300ms pre-roll; do not transcribe seconds of initial room silence.
     return CapturedAudio(bytes(captured[trim_samples * 2:]) if endpoint.speech else b'', rate,
                          truncated or overflow, cancelled(), endpoint_at or end, speech_end,
-                         capture_started, speech_started, end, reason)
+                         capture_started, speech_started, end, reason,
+                         endpoint.active / rate * 1000,
+                         (endpoint.last_active - endpoint.first_active) / rate * 1000
+                         if endpoint.first_active is not None else 0)

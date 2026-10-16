@@ -25,11 +25,11 @@ platform.system = lambda: 'Linux'
 platform.machine = lambda: 'aarch64'
 sys.modules['sounddevice'] = None
 from config import load_settings
-from core.app import ValleRaApp
+from core.app import RavenApp
 from services.storage.secret_store import SecretStore
 with tempfile.TemporaryDirectory() as root:
     settings = load_settings(root=Path(root))
-    app = ValleRaApp(settings, SecretStore(Path(root) / 'secrets.json'), text_only=True)
+    app = RavenApp(settings, SecretStore(Path(root) / 'secrets.json'), text_only=True)
     assert app.listener is None
     asyncio.run(app.speaker.say('fixture response'))
     assert app.speaker._queue.empty()

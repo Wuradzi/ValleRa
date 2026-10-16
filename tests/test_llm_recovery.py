@@ -27,7 +27,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         manager.settings = SimpleNamespace(
             history_limit=50, llm_total_timeout_seconds=2, llm_failures_before_switch=3,
         )
-        manager.system_prompt = "Тебе звати Валера."
+        manager.system_prompt = "Тебе звати Рейвен."
         manager.history = AtomicJSONFile(Path(temp.name) / "history.json", {"messages": []})
         manager.providers = dict(zip(["gemini", "groq"], providers))
         manager.available_order = list(manager.providers)

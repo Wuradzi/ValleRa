@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import re
 import time
+from typing import TypedDict
 
 from core.models import RecognitionResult
 from core.action_proposal import ProposalState
@@ -15,6 +16,16 @@ from core.natural_turn import (
     direct_request, voice_request, short_clarification, application_name_reply,
 )
 from services.audio.endpoint import QuietEndpoint
+
+
+class TurnRecognitionFlags(TypedDict):
+    """Queue-boundary projection only; does not infer or grant execution trust."""
+    confidence_available: bool
+    utterance_incomplete: bool
+    capture_truncated: bool
+    recognition_unreliable: bool
+    action_eligible: bool
+    clarification_required: bool
 
 
 class DialogueState:
@@ -38,7 +49,7 @@ class DialogueState:
 
 class RecognitionPolicy:
     FAST_CHAT = re.compile(
-        r"^(?:валера[\s,]+)?(?:привіт|здорово|дякую|дякую тобі|як справи|"
+        r"^(?:рейвен[\s,]+)?(?:привіт|здорово|дякую|дякую тобі|як справи|"
         r"як твої справи|так|ні|добре|гаразд|зрозуміло|до побачення)[.!?]*$",
         re.IGNORECASE,
     )
@@ -50,7 +61,23 @@ class RecognitionPolicy:
     @staticmethod
     def action_eligible(result):
         """Legacy evidence adapter, not approval to execute."""
-        return not result.fragmented
+        return result.confidence_available and not result.fragmented
+
+    @classmethod
+    def turn_flags(cls, result: RecognitionResult) -> TurnRecognitionFlags:
+        """Preserve existing queue semantics, keeping evidence axes independent.
+
+        Do not derive eligibility from any single reliability flag here. Producers
+        retain their legacy restriction and downstream policy retains its checks.
+        """
+        return {
+            'confidence_available': result.confidence_available,
+            'utterance_incomplete': result.resolved_utterance_incomplete,
+            'capture_truncated': result.capture_truncated,
+            'recognition_unreliable': result.recognition_unreliable,
+            'action_eligible': cls.action_eligible(result),
+            'clarification_required': result.incomplete,
+        }
 
     def finish_quality(self, result, *, fragmented, incomplete, unsafe_refinement):
         # Preserve the old compatibility flags and repeat-vs-chat choice.

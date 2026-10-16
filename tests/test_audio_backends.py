@@ -138,7 +138,7 @@ class AudioBackendTests(unittest.TestCase):
 
     def test_transcribe_forces_uk_task_and_preserves_hints(self):
         self.settings.stt_whisper_prompt = 'Українська мова.'
-        self.settings.stt_whisper_hotwords = 'ValleRa'
+        self.settings.stt_whisper_hotwords = 'Raven'
         backend = FasterWhisperBackend(primary_settings(self.settings), process=False)
         model = Mock()
         model.transcribe.return_value = ([], SimpleNamespace(language_probability=1))
@@ -147,7 +147,7 @@ class AudioBackendTests(unittest.TestCase):
         kwargs = model.transcribe.call_args.kwargs
         self.assertEqual(kwargs['language'], 'uk')
         self.assertEqual(kwargs['task'], 'transcribe')
-        self.assertEqual(kwargs['hotwords'], 'ValleRa')
+        self.assertEqual(kwargs['hotwords'], 'Raven')
         self.assertEqual(kwargs['initial_prompt'], 'Українська мова.')
 
     def test_cuda_load_failure_uses_same_model_cpu(self):

@@ -65,7 +65,7 @@ def tts_self_test(settings, synthesize=None):
                 stage='temp_file_creation', error_type=None, exception_message=None, exit_code=None)
     status = 'synthesis_failed'
     try:
-        with tempfile.TemporaryDirectory(prefix='valera-tts-check-') as folder:
+        with tempfile.TemporaryDirectory(prefix='raven-tts-check-') as folder:
             path = Path(folder) / 'probe.wav'
             data['stage'] = 'backend_initialization'
             result = (synthesize or platform.synthesize_probe)(path, settings.tts_voice_hint)

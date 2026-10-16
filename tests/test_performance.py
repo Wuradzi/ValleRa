@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
 
 from config import ProjectPaths, Settings
-from core.app import ValleRaApp
+from core.app import RavenApp
 from core.metrics import MetricsCollector
 from core.performance import PerformanceRecorder
 from core.speak import Speaker
@@ -88,7 +88,7 @@ class AsyncRecorderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stt_stage_records_unavailable_backend(self):
         metrics = Mock()
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.performance = PerformanceRecorder(metrics)
         app.settings = SimpleNamespace(stt_whisper_preload=True, stt_backend='vosk')
         app.listener = SimpleNamespace(
@@ -101,7 +101,7 @@ class AsyncRecorderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[-1]["status"], "unavailable")
 
     async def test_primary_stt_preload_does_not_load_vosk(self):
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.settings = SimpleNamespace(stt_whisper_preload=True, stt_backend='faster-whisper')
         app.listener = SimpleNamespace(_get_model=Mock(), prepare=Mock(return_value=(True, 'ready')))
         await app._prepare_stt()

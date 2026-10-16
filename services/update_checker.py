@@ -16,7 +16,7 @@ class UpdateChecker:
         async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
             response = await client.get(
                 url,
-                headers={"Accept": "application/vnd.github+json", "User-Agent": "ValleRa"},
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "Raven"},
             )
             if response.status_code == 404:
                 return None

@@ -23,7 +23,7 @@ from pathlib import Path
 from uuid import uuid4
 
 SAMPLES = (
-    ("story", "Привіт, Валера. Розкажи коротку цікаву історію про подорож."),
+    ("story", "Привіт, Рейвен. Розкажи коротку цікаву історію про подорож."),
     ("explanation", "Поясни простими словами, чому восени жовтіє листя на деревах."),
     ("conversation", "Я сьогодні трохи втомився. Давай просто поговоримо про музику."),
     ("browser", "Команда, відкрий браузер."),
@@ -188,7 +188,7 @@ async def compare(args, settings, paths):
             samples[name] = load_audio(path)
             record("audio", id=name, reference=text, seconds=samples[name][2],
                    pcm_sha256=hashlib.sha256(samples[name][0]).hexdigest())
-        # Keep the actual Vosk model resident, as in ValleRa. Never open an input stream.
+        # Keep the actual Vosk model resident, as in Raven. Never open an input stream.
         started = time.perf_counter()
         await asyncio.to_thread(listener._get_model)
         record("vosk_resident", seconds=round(time.perf_counter() - started, 3))

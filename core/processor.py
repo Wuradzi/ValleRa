@@ -11,9 +11,10 @@ from core.dialogue_decision import DialogueDecision, DecisionKind
 from core.action_policy import PolicyOutcome, turn_permission, natural_action_permission
 from core.action_proposal import ReplyKind, proposal_question, needs_proposal
 from core.command_actions import execute_intent
-from core.command_intent import CommandIntent, InterpretationUnavailable, MULTI_ACTION, can_interpret, preserves_search_intent
+from core.command_intent import CommandIntent, InterpretationUnavailable, MULTI_ACTION, can_interpret, original_search_intent, preserves_search_intent
 from core.command_catalog import chat_catalog, local_intent_candidates
-from core.natural_turn import direct_request, application_name_reply, request_scope, short_clarification, voice_request, window_request, exact_open_request
+from core.natural_turn import direct_request, application_name_reply, request_scope, short_clarification, voice_request, window_request
+from core.local_action_resolver import resolve_exact_app
 from core.performance import DISABLED_PERFORMANCE
 from core.speech_text import SpeechBuffer
 from services.llm.manager import CHAT_MODE_PROMPT
@@ -92,6 +93,15 @@ class CommandProcessor:
         self._reply_interrupted = False
         self._reply_truncated = False
         self._natural_pending = None
+        from core.document_reading import DocumentReading
+        self.documents = DocumentReading()
+
+    def _document_options(self, text):
+        # Documents inform conversation, never supply arguments for a requested action.
+        if direct_request(text, ''):
+            return {}
+        document = self.documents.document.context(text + '\n' + self._last_question)
+        return {'document_context': document} if document else {}
 
     def _cache_reply(self, text):
         # Session-only generated text; not a record of physically heard audio.
@@ -112,16 +122,62 @@ class CommandProcessor:
                       incomplete_input=False) -> SkillResult:
         # Direct string callers (probes/tests) keep their existing API; app always
         # supplies an envelope. Never mint an operational ID in the processor.
+        caller_allows_actions = allow_actions
         input_turn = command if isinstance(command, TurnEnvelope) else None
         if input_turn is not None:
             command, source = input_turn.text, input_turn.source
-            allow_actions = allow_actions and input_turn.action_eligible
+            allow_actions = allow_actions and input_turn.action_eligible and input_turn.confidence_available
             incomplete_input = incomplete_input or input_turn.clarification_required
         started = time.perf_counter()
         raw_text = command.strip()
         normalized = self._normalize(raw_text)
         state = self.services["state"]
         mode = state.get("mode", "chat")
+        document_text = COMMAND_PREFIX.sub(r'\1', raw_text) if COMMAND_PREFIX.match(raw_text) else raw_text
+        if (mode == 'chat' and 'files' in self.services.get('enabled_skills', set())
+                and self.documents.accepts(document_text)):
+            reliable = not incomplete_input and (input_turn is None or not (
+                input_turn.recognition_unreliable or input_turn.capture_truncated or input_turn.utterance_incomplete))
+            permitted = caller_allows_actions and reliable and (allow_actions or (
+                input_turn is not None and input_turn.stt_engine == 'groq' and not input_turn.confidence_available))
+            if not permitted:
+                self.documents.pending = None
+                return SkillResult(True, 'Повторіть прохання прочитати файл повністю або введіть його текстом.')
+            context = CommandContext(self.settings, self.services, confirm, source, raw_text=document_text,
+                                     turn_id=input_turn.turn_id if input_turn else None)
+            result = await self.documents.handle(document_text, context)
+            if result is not None:
+                self._natural_pending = None
+                self.dialogue_state.proposals.clear()
+                if self.services.get('tasks') is not None:
+                    self.services['tasks'].clear()
+                return result
+        from skills.memory.personal import parse_request, handle_request
+        memory_text = COMMAND_PREFIX.sub(r'\1', raw_text) if COMMAND_PREFIX.match(raw_text) else raw_text
+        memory_request = parse_request(memory_text) if mode == 'chat' else None
+        if memory_request and 'memory' in self.services.get('enabled_skills', set()):
+            reliable = (not incomplete_input and (input_turn is None or not (
+                input_turn.recognition_unreliable or input_turn.capture_truncated or input_turn.utterance_incomplete)))
+            permitted = caller_allows_actions and reliable and (allow_actions or (
+                input_turn is not None and input_turn.stt_engine == 'groq' and not input_turn.confidence_available))
+            if not permitted:
+                return SkillResult(True, 'Повторіть запит пам’яті повністю або введіть його текстом.')
+            context = CommandContext(self.settings, self.services, confirm, source, raw_text=memory_text,
+                                     turn_id=input_turn.turn_id if input_turn else None)
+            try:
+                result = await handle_request(memory_request, context, self.llm_manager)
+            except OSError:
+                logger.exception('Memory storage operation failed')
+                return SkillResult(True, 'Не вдалося завершити зміну пам’яті. Перевірте сховище.')
+            if result.data.get('memory_context_reset'):
+                self.documents.clear()
+                self._natural_pending = None
+                self.dialogue_state.proposals.clear()
+                self._last_question = ''
+                self._cache_reply('')
+                if self.services.get('web_answers') is not None:
+                    self.services['web_answers'].clear()
+            return result
         proposals = self.dialogue_state.proposals
         session_id = input_turn.session_id if input_turn is not None else proposals.session_id
         proposal_lease = proposals.begin_turn(session_id)
@@ -133,24 +189,65 @@ class CommandProcessor:
                 or getattr(self.services.get('tasks'), 'pending', None) is not None):
             proposal_lease = None
         permission = turn_permission(allow_actions, incomplete_input,
-                                     stop=bool(STOP_SPEECH.fullmatch(raw_text)))
+                                     stop=bool(STOP_SPEECH.fullmatch(raw_text)) and
+                                     (input_turn is None or input_turn.confidence_available))
         if permission is not PolicyOutcome.ALLOW:
             # STT continuation is context, never authority for a tool or a pending
             # selection. Require a fresh complete request before normal approval.
+            prior_clarification = self._natural_pending
             self._natural_pending = None
             if self.conversation_paused:
                 return SkillResult(True, "", {"command_type": "conversation_paused"})
-            if incomplete_input:
+            lexical_fragment = (input_turn is not None and not input_turn.confidence_available
+                and input_turn.utterance_incomplete and not input_turn.capture_truncated
+                and not input_turn.recognition_unreliable and not COMMAND_PREFIX.match(raw_text))
+            if incomplete_input and not lexical_fragment:
                 return SkillResult(True, "Схоже, фраза обірвалася. Повторіть її повністю, будь ласка.",
                                    {"command_type": "fragment_clarify"})
             notice = "Почув фразу частинами. Повторіть повне прохання про дію; нічого не виконано."
-            if mode != "chat" or COMMAND_PREFIX.match(raw_text):
+            if input_turn is not None and not input_turn.confidence_available and not lexical_fragment:
+                notice = "Для цієї голосової репліки немає оцінки впевненості. Дію не виконано; введіть прохання текстом."
+            groq_candidate = (caller_allows_actions and input_turn is not None and input_turn.source == 'voice'
+                and input_turn.stt_engine == 'groq' and not input_turn.confidence_available
+                and not input_turn.recognition_unreliable and not input_turn.capture_truncated
+                and not input_turn.utterance_incomplete and not incomplete_input
+                and getattr(self.settings, 'natural_actions_enabled', False))
+            if mode != "chat" or (COMMAND_PREFIX.match(raw_text) and not groq_candidate):
                 return SkillResult(True, notice, {"command_type": "fragment_clarify"})
+            candidate_text = raw_text
+            if groq_candidate and COMMAND_PREFIX.match(raw_text):
+                candidate_text = COMMAND_PREFIX.match(raw_text).group(1).strip()
+            scoped_name = (application_name_reply(candidate_text) if groq_candidate
+                and prior_clarification and prior_clarification.get('groq_scoped')
+                and time.monotonic() < prior_clarification['expires']
+                and not direct_request(candidate_text, '') else None)
+            # Only fill the missing app name of a recent explicit open request.
+            # A conversational 'yes' is not permission and cannot fill this slot.
+            model_text = (prior_clarification['request'] + '\nНазва програми: ' + scoped_name
+                          if scoped_name else candidate_text)
             web = self.services.get("web_answers")
-            task = asyncio.create_task(self.llm_manager.converse(
-                raw_text, self.services["memory"].relevant(normalized),
-                enabled_skills=self.services.get("enabled_skills", set()),
-                web_context=web.dialogue_context() if web is not None else None))
+            streamed_parts = []
+
+            async def speak_preview(phrase):
+                phrase = phrase.strip()
+                await self.speaker.say(phrase)
+                streamed_parts.append(phrase)
+                self._cache_reply(' '.join(streamed_parts))
+
+            async def propose():
+                intent = await self._resolve_exact_app(candidate_text) if groq_candidate else None
+                if intent is not None:
+                    from core.natural_turn import NaturalTurn
+                    logger.info('Groq proposal route=local_exact; confirmation_required=true')
+                    return NaturalTurn('action', intent=intent)
+                return await self.llm_manager.converse(
+                    model_text, self.services["memory"].relevant(normalized),
+                    enabled_skills=self.services.get("enabled_skills", set()),
+                    web_context=web.dialogue_context() if web is not None else None,
+                    **self._document_options(model_text),
+                    **({'on_chunk': speak_preview} if groq_candidate else {}))
+
+            task = asyncio.create_task(propose())
             self._chat_task = task
             try:
                 turn = await task
@@ -160,8 +257,48 @@ class CommandProcessor:
                 return SkillResult(True, "", {"command_type": "chat_interrupted"})
             finally:
                 self._chat_task = None
+            if groq_candidate and turn.kind == 'action':
+                # Separate candidate path, not ACTION eligibility or router re-entry.
+                # Only audited executor branches which ALWAYS preview exact args
+                # and ask the existing correlated confirmation may be reached.
+                from core.command_intent import validate_intent, InvalidIntent
+                try:
+                    intent = validate_intent({'tool': turn.intent.tool, 'arguments': turn.intent.arguments})
+                except (InvalidIntent, AttributeError, TypeError):
+                    return SkillResult(True, 'Не вдалося перевірити дію. Уточніть повне прохання.',
+                                       {'command_type': 'intent_clarification'})
+                if intent.tool not in {'open_app', 'find_files', 'weather', 'web_search'}:
+                    return SkillResult(True, 'Для цієї дії введіть прохання текстом. Нічого не виконано.',
+                                       {'command_type': 'intent_clarification'})
+                decision = DialogueDecision(DecisionKind.ACTION_CANDIDATE, intent=intent,
+                                            turn_id=input_turn.turn_id)
+                permission = natural_action_permission(decision,
+                    prior_clarification['request'] if scoped_name else candidate_text,
+                    candidate_text, prior_clarification if scoped_name else None, bool(scoped_name))
+                if permission.outcome is not PolicyOutcome.ALLOW:
+                    return SkillResult(True, permission.response, {'command_type': 'intent_clarification'})
+                context = CommandContext(self.settings, self.services, confirm, source,
+                    raw_text=candidate_text, normalized_text=self._normalize(candidate_text), turn_id=input_turn.turn_id)
+                result = await asyncio.wait_for(execute_intent(permission.intent, context), timeout=120)
+                result.data['natural_action'] = True
+                return result
+            missing_app_name = bool(re.search(r'\b(?:відкрити|відкрий|запустити|запусти)\s+(?:мені\s+)?програму[.!?\s]*$', candidate_text, re.I))
+            if (groq_candidate and request_scope(candidate_text) == 'open_app'
+                    and (turn.kind == 'clarify' or (turn.kind == 'chat' and missing_app_name))):
+                self._natural_pending = {'tool': 'open_app', 'request': candidate_text,
+                                        'expires': time.monotonic() + 120, 'groq_scoped': True}
+            if turn.kind == 'unavailable':
+                if streamed_parts:
+                    await speak_preview(turn.response)
+                    return SkillResult(True, ' '.join(streamed_parts),
+                                       {'command_type': 'llm_unavailable', 'response_spoken': True})
+                return SkillResult(True, turn.response, {'command_type': 'llm_unavailable'})
+            if turn.kind in {'proposal', 'followup'}:
+                return SkillResult(True, 'Уточніть повне прохання, якщо хочете виконати дію. Нічого не виконано.',
+                                   {'command_type': 'intent_clarification'})
             return SkillResult(True, turn.response if turn.kind in {"chat", "clarify"} else notice,
-                               {"command_type": "fragment_chat" if turn.kind == "chat" else "fragment_clarify"})
+                               {"command_type": "fragment_chat" if turn.kind == "chat" else "fragment_clarify",
+                                "response_spoken": bool(streamed_parts)})
         success = True
         provider = "local"
         command_match = COMMAND_PREFIX.match(raw_text)
@@ -328,6 +465,7 @@ class CommandProcessor:
                         system_context,
                         on_chunk=on_chunk,
                         **web_options,
+                        **self._document_options(raw_text),
                     ))
                     self._chat_task = chat_task
                     try:
@@ -372,6 +510,7 @@ class CommandProcessor:
             logger.info("Local result type=%s status=%s accepted=%s verified=%s", command_type,
                         result.data.get("status", "unspecified"), result.data.get("accepted"), result.data.get("verified"))
         if command_type == "conversation_new":
+            self.documents.clear()
             self._natural_pending = None
             if self.services.get("tasks") is not None:
                 self.services["tasks"].clear()
@@ -471,7 +610,7 @@ class CommandProcessor:
                           + "\nЦе продовження одного запиту. Запропонуй тільки " + pending["tool"]
                           + "; не вигадуй відсутніх параметрів. Дозвіл на виконання запитає локальна система.")
         # Exact saved-workplace requests need no model permission dialogue.
-        local_request = re.sub(r"^(?:валера|валеро)[, ]+", "", request.strip(), flags=re.I)
+        local_request = re.sub(r"^(?:рейвен|рейвене|raven)[, ]+", "", request.strip(), flags=re.I)
         if (WORK_MODE.fullmatch(local_request) or local_request.lower().rstrip('.!?') in
                 {"підготуй робоче місце", "підготуй мене до роботи", "включи режим робота"}):
             result = await execute_intent(CommandIntent("prepare_workplace", {}), context)
@@ -479,22 +618,13 @@ class CommandProcessor:
             return result
         # A complete, literal installed-app request does not need model inference.
         # No speculative launch: the SAME validator, approval and result checks run.
-        name = exact_open_request(request) if not scoped else None
-        exact = getattr(self.services.get("apps"), "has_exact_name", None)
-        if name and callable(exact) and "apps" in self.services.get("enabled_skills", set()):
-            known = False
-            with self.services.get("performance", DISABLED_PERFORMANCE).span("command.local_app_lookup"):
-                try:
-                    known = await asyncio.wait_for(asyncio.to_thread(exact, name), timeout=0.25)
-                except (TimeoutError, OSError, ValueError, KeyError, TypeError, AttributeError):
-                    logger.info("Local app lookup unavailable; using normal intent path")
-            if known is True:
-                logger.info("Natural decision kind=action tool=open_app route=local_exact")
-                result = await asyncio.wait_for(
-                    execute_intent(CommandIntent("open_app", {"name": name}), context), timeout=120)
-                result.data["natural_action"] = True
-                result.data["intent_route"] = "local_exact"
-                return result
+        intent = await self._resolve_exact_app(request) if not scoped else None
+        if intent is not None:
+            logger.info("Natural decision kind=action tool=open_app route=local_exact")
+            result = await asyncio.wait_for(execute_intent(intent, context), timeout=120)
+            result.data["natural_action"] = True
+            result.data["intent_route"] = "local_exact"
+            return result
         buffer = SpeechBuffer()
         spoken = []
         self._last_question = text[:2000]
@@ -511,8 +641,7 @@ class CommandProcessor:
                 self._cache_reply(" ".join(spoken))
 
         async def on_chunk(chunk):
-            # converse delivers ONE fully validated envelope, not raw tokens.
-            # Flush its last sentence now, before stream cleanup/history writes.
+            # Explicit CHAT supplies screened sentences; other formats wait for validation.
             await emit(buffer.feed(chunk, final=True))
 
         proposal_options = {}
@@ -521,6 +650,7 @@ class CommandProcessor:
         task = asyncio.create_task(self.llm_manager.converse(
             model_text, self.services["memory"].relevant(normalized),
             enabled_skills=self.services.get("enabled_skills", set()), web_context=web_context,
+            **self._document_options(model_text),
             on_chunk=on_chunk, **proposal_options))
         self._chat_task = task
         try:
@@ -555,6 +685,13 @@ class CommandProcessor:
             result.data["natural_action"] = True
             self._reply_interrupted = False
             return result
+        if turn.kind == 'unavailable' and spoken:
+            # Preserve partial speech, surface failure, and never rewrite older history.
+            await emit([turn.response])
+            answer = " ".join(spoken)
+            self._cache_reply(answer)
+            self._reply_interrupted = True
+            return SkillResult(True, answer, {"command_type": "chat", "response_spoken": True})
         await emit(buffer.feed("", final=True))
         answer = " ".join(spoken) if spoken else turn.response
         if LOCAL_ACTION_CLAIM.match(answer.lower().strip()):
@@ -618,6 +755,12 @@ class CommandProcessor:
         result.data['intent_route'] = 'contextual_followup'
         return result
 
+    async def _resolve_exact_app(self, request: str) -> CommandIntent | None:
+        with self.services.get('performance', DISABLED_PERFORMANCE).span('command.local_app_lookup'):
+            return await resolve_exact_app(
+                request, getattr(self.services.get('apps'), 'has_exact_name', None),
+                apps_enabled='apps' in self.services.get('enabled_skills', set()))
+
     async def _route_local(
         self,
         command: str,
@@ -647,6 +790,7 @@ class CommandProcessor:
             except InterpretationUnavailable as exc:
                 return SkillResult(True, str(exc), {"command_type": "interpretation_unavailable", "success": False})
             if intent is not None:
+                intent = original_search_intent(context.raw_text, intent)
                 if not preserves_search_intent(context.raw_text, intent):
                     return SkillResult(True, "Не можу надійно зберегти зміст пошукового запиту. "
                                        "Скажіть: Команда, знайди в інтернеті, і точний запит.",

@@ -9,7 +9,7 @@ using System.Speech.AudioFormat;
 
 // Only the assistant's PCM passes through this stream. No microphone/loopback.
 // Audio is played in bounded blocks; completed blocks supply UI telemetry.
-public sealed class ValeraSpeechAudio : Stream
+public sealed class RavenSpeechAudio : Stream
 {
     [StructLayout(LayoutKind.Sequential, Pack = 2)]
     private struct WaveFormat
@@ -52,7 +52,7 @@ public sealed class ValeraSpeechAudio : Stream
     {
         get { return new SpeechAudioFormatInfo(22050, AudioBitsPerSample.Sixteen, AudioChannel.Mono); }
     }
-    public ValeraSpeechAudio()
+    public RavenSpeechAudio()
     {
         WaveFormat format = new WaveFormat { Tag = 1, Channels = 1, Rate = 22050,
             BytesPerSecond = 44100, Alignment = 2, Bits = 16 };
@@ -72,7 +72,7 @@ public sealed class ValeraSpeechAudio : Stream
     public override void SetLength(long n) { throw new NotSupportedException(); }
     public override void Write(byte[] data, int offset, int count)
     {
-        if (closed) throw new ObjectDisposedException("ValeraSpeechAudio");
+        if (closed) throw new ObjectDisposedException("RavenSpeechAudio");
         if (data == null || offset < 0 || count < 0 || offset > data.Length - count)
             throw new ArgumentException("Invalid PCM buffer");
         while (count > 0)

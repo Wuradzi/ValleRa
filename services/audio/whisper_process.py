@@ -108,7 +108,7 @@ class ProcessWhisperRecognizer:
                         target=self._target,
                         args=(child, self.settings),
                         daemon=True,
-                        name="valera-whisper",
+                        name="raven-whisper",
                     )
                     self._connection = parent
                     try:

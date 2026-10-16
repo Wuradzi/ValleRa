@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from core.command_catalog import intent_catalog
+from core.command_catalog import intent_catalog, command_help
 from core.command_intent import CommandIntent, InvalidIntent, MULTI_ACTION, SENSITIVE_REQUEST, parse_intent
 from core.security import redact_user_text
 from core.action_proposal import ProposalReply, parse_reply
@@ -19,7 +19,13 @@ class NaturalTurn:
 
 
 def turn_prompt(enabled):
-    return """Ти Валера, українськомовний співрозмовник та помічник. Аналізуй поточну репліку.
+    capabilities = 'Фактично доступні локальні функції: ' + command_help(enabled) + '.\n'
+    if 'files' in enabled:
+        capabilities += ('«Прочитай файл <назва>» обробляє локальний читач із вибором і згодою на '
+                         'передавання тексту моделі. Він підтримує текстові формати, DOCX, ODT, '
+                         'але не PDF/скани/DOC. Без переданого контексту не стверджуй, що читав файл. '
+                         'Це не ACTION tool; не вигадуй JSON для нього.\n')
+    return capabilities + """Ти Рейвен, українськомовний співрозмовник та помічник. Аналізуй поточну репліку.
 Слово Команда не потрібне. Відповідай одним із форматів, без Markdown:
 CHAT\nзвичайна відповідь
 CLARIFY\nодне коротке уточнювальне питання
@@ -28,6 +34,11 @@ PROPOSAL\nодин JSON з tool та arguments із каталогу нижче
 FOLLOWUP\nодин JSON з proposal_id та resolution
 Перший рядок — рівно CHAT, CLARIFY, ACTION, PROPOSAL або FOLLOWUP. Не змішуй формати.
 CHAT: відповідай природно, зазвичай 1–3 речення; на прохання можна докладніше.
+Коротка відповідь на твоє питання продовжує тему розмови, а не автоматично просить дію.
+Збережені історія та резюме можуть походити з попередніх запусків. Не стверджуй,
+що пам'ятаєш усе або лише поточну сесію. Без явної позначки часу не приписуй
+згадки поточній сесії. Враховуй виправлення користувача, не сперечайся про походження контексту.
+Не приписуй користувачу власні припущення чи пропозиції як його факти.
 ACTION: тільки пряме поточне прохання користувача зробити підтримувану дію.
 Не стверджуй, що дію вже виконано: локальний виконавець ще перевірить її та
 запитає підтвердження. У CHAT/CLARIFY ніколи не кажи, що виконав локальну дію.
@@ -131,9 +142,39 @@ class TurnDecoder:
         return NaturalTurn(self.kind, safe_dialogue(self.body.strip()))
 
 
+class ChatPreview:
+    """Sentence-only preview of explicit CHAT; never a control-output parser."""
+    def __init__(self):
+        self.offset = 0
+        self.emitted = False
+
+    def ready(self, decoder):
+        if decoder.kind != 'chat':
+            return []
+        body = decoder.body
+        suspicious = re.search(
+            r'\b(?:CHAT|CLARIFY|ACTION|PROPOSAL|FOLLOWUP|tool|arguments|tool_calls?|function_call)\b|[{}\[\]]|```',
+            body, re.I)
+        if suspicious or safe_dialogue(body.strip()) != body.strip():
+            if self.emitted:
+                raise InvalidIntent('mixed control output')
+            return []
+        ready = []
+        for match in re.finditer(r'[.!?]["»)]*\s+', body[self.offset:]):
+            end = self.offset + match.end()
+            ready.append(end)
+        phrases = []
+        for end in ready:
+            phrase = body[self.offset:end]
+            self.offset = end
+            if phrase.strip():
+                phrases.append(phrase)
+        return phrases
+
+
 def safe_dialogue(text):
     """Model prose is not an execution receipt or a running background job."""
-    if re.search(r"(?:відкриваю|запускаю|закриваю|припиняю|шукаємо|шукаю|розпочинаю пошук|"
+    if re.search(r"\b(?:відкриваю|запускаю|закриваю|припиняю|шукаємо|шукаю|розпочинаю пошук|"
                  r"пошук (?:триває|запущено|завершено)|виконавець (?:перевірить|завершить)|"
                  r"зачекай.{0,30}результат|результат.{0,30}з'явиться|(?:я |вже )(?:знайшов|відкрив|запустив))", text, re.I):
         return "Дію ще не виконано. Уточніть, будь ласка, що саме потрібно зробити."
@@ -169,7 +210,7 @@ def request_lead(text):
     """Only conversational prefixes, never remove negation or narrative subjects."""
     value = text.strip()
     for _ in range(4):
-        trimmed = re.sub(r"^(?:валера|валеро|тепер|зараз|будь ласка)[,\s]+", "", value, flags=re.I)
+        trimmed = re.sub(r"^(?:рейвен|рейвене|raven|послухай мене|тепер|зараз|будь ласка)[,\s]+", "", value, flags=re.I)
         if trimmed == value:
             break
         value = trimmed
@@ -214,33 +255,48 @@ def direct_request(text, tool):
         return True
     if re.search(r"\b(?:не|ні|якщо|уяви|сказав|сказала|написав|написала|цитата|приклад|скажи|переклади)\b", value):
         return False
-    value = re.sub(r"^(?:валера |валеро )", "", value)
+    # Explicit first-person request addressed to the assistant, not a story
+    # about somebody else's wishes. Keep the original text/arguments intact.
+    polite = re.fullmatch(r"я (?:(?:би|б) )?хоті(?:в|ла)(?: (?:би|б))? щоб ти (?:мені )?"
+                          r"(знайшов|знайшла|відкрив|відкрила|запустив|запустила) (.+)", value)
+    if polite:
+        verb = {'знайшов': 'знайди', 'знайшла': 'знайди', 'відкрив': 'відкрий',
+                'відкрила': 'відкрий', 'запустив': 'запусти', 'запустила': 'запусти'}[polite[1]]
+        value = verb + ' ' + polite[2]
+    value = re.sub(r"^(?:рейвен |рейвене |raven )", "", value)
     value = re.sub(r"^будь ласка ", "", value)
+    value = re.sub(r"^(?:а )?(?:(?:чи )?ти можеш|(?:чи )?можеш(?: ти)?)(?: мені)? ", "", value)
     value = re.sub(r"^(?:чи можеш ти |чи можеш |можеш ти |можеш |мені потрібно |мені треба )", "", value)
     value = re.sub(r"^будь ласка ", "", value)
     # Mentions and past-tense narrative do not authorize action, even if the model errs.
-    return bool(re.match(r"^(?:розгорни|розгорнути|згорни|згорнути|віднови|відновити|відкрий|відкрити|відкрей|запусти|запустити|знайди|знайти|пошукай|пошукати|покажи|"
+    return bool(re.match(r"^(?:розгорни|розгорнути|згорни|згорнути|віднови|відновити|відкрий|відкрій|відкрити|відкрей|запусти|запустити|знайди|знайти|пошукай|пошукати|покажи|"
                          r"підготуй|підготувати|підготує|підготують|увімкни|увімкнути|ввімкни|ввімкнути|включи|активуй|режим робота|повтори|продовж робоче|"
                          r"статус завдання|що вдалося|що з робочим місцем|погода|яка погода|прогноз погоди)\b", value))
 
 
 def asks_to_open(text):
-    return direct_request(text, "open_app") and bool(re.search(r"\b(?:відкрий|відкрити|відкрей|запусти|запустити)\b", text, re.I))
+    return direct_request(text, "open_app") and bool(re.search(r"\b(?:відкрий|відкрій|відкрити|відкрей|відкрив|відкрила|запусти|запустити|запустив|запустила)\b", text, re.I))
 
 
 def exact_open_request(text):
-    """Extract one literal app name; a separate catalogue check must accept it."""
+    """Extract one literal app name; the installed-app catalogue must accept it."""
     if not direct_request(text, "open_app") or request_scope(text) != "open_app":
         return None
     value = request_lead(text)
-    value = re.sub(r"^(?:чи можеш ти |чи можеш |можеш ти |можеш )", "", value, flags=re.I)
-    match = re.fullmatch(r"(?:відкрий|відкрити|запусти|запустити)\s+(?:програму\s+)?(.+?)[.!?]*", value, re.I)
+    value = re.sub(r"^(?:а\s+)?(?:(?:чи\s+)?ти\s+можеш|(?:чи\s+)?можеш(?:\s+ти)?)(?:\s+мені)?\s+",
+                   "", value, flags=re.I)
+    value = re.sub(r"^(?:мені потрібно|мені треба)\s+", "", value, flags=re.I)
+    value = re.sub(r"^будь ласка[,\s]+", "", value, flags=re.I)
+    value = re.sub(r"[,\s]+будь ласка[.!?\s]*$", "", value, flags=re.I)
+    match = re.fullmatch(r"(?:відкрий|відкрій|відкрей|відкрити|запусти|запустити)\s+"
+                         r"(?:мені\s+)?(?:програму\s+)?(?:мені\s+)?(.+?)[.!?]*", value, re.I)
     return application_name_reply(match[1]) if match else None
 
 
 def application_name_reply(text):
     value = text.strip().rstrip(".!?").strip()
-    if value.casefold() in {"так", "ні", "гаразд", "добре", "скасувати", "не треба", "підтверджую"}:
+    if value.casefold() in {"так", "ні", "гаразд", "добре", "скасувати", "не треба", "підтверджую",
+                           "відміна", "скасуй", "скасовую", "відмовляюсь"}:
         return None
     if len(value.split()) > 4 or re.search(r"\b(?:не|ні|якщо|я|ми|ти|він|вона|сьогодні|вчора|відкрий|закрий|видали|скасуй)\b", value, re.I):
         return None

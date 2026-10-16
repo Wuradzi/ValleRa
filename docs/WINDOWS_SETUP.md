@@ -1,4 +1,4 @@
-# Встановлення ValleRa на Windows
+# Встановлення Raven на Windows
 
 Повернутися до [README](../README.md). Усі команди виконуються в PowerShell
 із кореня клонованого репозиторію, якщо не зазначено інше.
@@ -15,15 +15,15 @@
 У PowerShell перейдіть до каталогу, де зберігаєте проєкти:
 
 ```powershell
-git clone https://github.com/Wuradzi/ValleRa.git
-cd ValleRa
+git clone https://github.com/Wuradzi/ValleRa.git Raven
+cd Raven
 git --version
 py -3.12 --version
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe install.py --profile desktop
 ```
 
-Наступні команди також виконуються з кореня `ValleRa`. Активація `.venv`
+Наступні команди також виконуються з кореня `Raven`. Активація `.venv`
 не обов’язкова: явний шлях до Python уникає проблем із PowerShell ExecutionPolicy.
 Не копіюйте `.venv` з іншого комп’ютера. Інсталятор установлює Python-залежності,
 але не встановлює голос RHVoice або системні CUDA-бібліотеки.
@@ -34,7 +34,7 @@ py -3.12 -m venv .venv
 оберіть **Volodymyr → Download the voice for other Windows programs**, не
 NVDA-addon. Запустіть інсталятор голосу. За
 [інструкцією RHVoice](https://rhvoice.org/installation/) цей SAPI 5 пакет уже
-містить потрібний рушій. Перезапустіть ValleRa після встановлення.
+містить потрібний рушій. Перезапустіть Raven після встановлення.
 Якщо встановили інший український голос, у майстрі введіть його назву замість
 `Volodymyr`; параметр зберігається в `tts.voice_hint`.
 
@@ -73,7 +73,7 @@ Balanced/edge не потребують CUDA. Не плутайте `stt.profile
 [офіційних вимог faster-whisper](https://github.com/SYSTRAN/faster-whisper#gpu):
 на дату перевірки 03.10.2026 — cuBLAS для CUDA 12 та cuDNN 9 для CUDA 12.
 Установіть їх за інструкціями виробника та забезпечте доступність DLL процесу
-Python. Сам `pip install` цього не гарантує. За помилки GPU ValleRa пробує
+Python. Сам `pip install` цього не гарантує. За помилки GPU Raven пробує
 ту саму модель на CPU й записує причину в лог; це може значно сповільнити роботу.
 
 Завантажте обидві потрібні моделі:

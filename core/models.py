@@ -21,6 +21,17 @@ class RecognitionResult:
     # Explicit provenance; None supports older direct RecognitionResult fixtures.
     utterance_incomplete: bool | None = None
     recognition_unreliable: bool = False
+    # False means unscored text, not a measured score of zero. Never authorizes actions.
+    confidence_available: bool = True
+
+    @property
+    def resolved_utterance_incomplete(self) -> bool:
+        """Explicit linguistic evidence wins; None retains the legacy fallback.
+
+        `incomplete` also controls repeat-vs-chat, while `fragmented` is a legacy
+        action restriction. Neither is interchangeable with recognition failure.
+        """
+        return self.incomplete if self.utterance_incomplete is None else self.utterance_incomplete
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -44,6 +55,8 @@ class TurnEnvelope:
     action_eligible: bool = True
     clarification_required: bool = False
     timing: TurnTiming | None = field(default=None, repr=False, compare=False)
+
+    confidence_available: bool = True
 
     @property
     def fragmented(self) -> bool:

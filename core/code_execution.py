@@ -43,7 +43,7 @@ class CodeExecutor:
         return await asyncio.to_thread(self._run, code)
 
     def _run(self, code: str) -> CodeExecutionResult:
-        with tempfile.TemporaryDirectory(prefix="valera_code_") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="raven_code_") as temp_dir:
             path = Path(temp_dir) / "generated.py"
             path.write_text(code, encoding="utf-8")
             try:

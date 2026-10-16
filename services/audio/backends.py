@@ -114,6 +114,9 @@ class VoskBackend:
 
 
 def create_backend(settings, profile, *, process=True, allow_download=False):
+    if profile.backend == 'groq':
+        from services.audio.groq_backend import GroqBackend
+        return GroqBackend(settings, profile)
     if profile.backend == 'faster-whisper':
         selected = primary_settings(settings, profile)
         selected.stt_whisper_local_files_only = not allow_download

@@ -42,7 +42,10 @@ class RequestTiming:
 
     def finish(self, status):
         self.mark("total")
-        logger.info("Gemini request status=%s timing=%s transport=%s", status, self.fields, self.events)
+        # Numeric counts are not credentials. Avoid the blanket secret filter's
+        # 'token' trigger without weakening that filter for actual secrets.
+        fields = {key.replace('_token_count', '_units'): value for key, value in self.fields.items()}
+        logger.info("Gemini request status=%s timing=%s transport=%s", status, fields, self.events)
 
 
 async def attach_timing(request):

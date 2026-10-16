@@ -245,7 +245,7 @@ class PublicPageReader:
             if parsed.query:
                 target += "?" + parsed.query
             writer.write((f"GET {target} HTTP/1.1\r\nHost: {parsed.netloc}\r\n"
-                          "User-Agent: ValleRa/1.0 (public page reader)\r\n"
+                          "User-Agent: Raven/1.0 (public page reader)\r\n"
                           "Accept: text/html, text/plain\r\nAccept-Encoding: gzip, identity\r\n"
                           "Connection: close\r\n\r\n").encode("ascii"))
             await writer.drain()

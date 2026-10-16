@@ -1,4 +1,34 @@
-# Перевірка ValleRa перед checkpoint
+# Перевірка Raven перед checkpoint
+
+## Відтворюване базове CI-середовище Windows
+
+`requirements-ci.txt` встановлює базові runtime dependencies та Ruff через
+`constraints-windows-py312.txt`: точні версії з локального Windows x64/Python
+3.12.7 середовища від 08.10.2026, включно з транзитивними HTTP extras.
+CI використовує Windows 2022/Python 3.12, cache key враховує constraints.
+
+У **новому окремому** venv із Python 3.12, з кореня проєкту:
+
+```powershell
+python -m pip install -r requirements-ci.txt
+python -m pip check
+python tester.py --all --verbose
+python -m ruff check .
+```
+
+Це знімок версій, не повний hash lock: patch Python, образ runner, pip,
+build isolation і доступність пакетів на індексі не зафіксовані. Чисте встановлення
+на GitHub Runner ще має пройти після публікації. Локальний dry-run із
+`--no-index` перевіряє лише сумісність уже встановлених пакетів.
+Production installer/defaults не змінені. Не застосовуйте цей Windows snapshot
+до Linux/ARM64; Groq/faster-whisper, моделі, CUDA та desktop extras сюди не входять.
+`requirements-dev.txt` зберігається для розширеного development environment;
+pytest/mypy не встановлюються базовим CI, який використовує unittest через tester.py.
+Цей патч не додає mypy gate або Linux CI та не доводить сумісність Raspberry Pi.
+
+Оновлення snapshot має бути явним: окремий venv, нові версії, `pip check`,
+повний tester/Ruff і перевірка clean install. Не використовуйте freeze з URL,
+editable paths чи приватними індексами як публічний файл залежностей.
 
 ## Phase 3D.1: edge voice measurement infrastructure
 
@@ -108,7 +138,7 @@ voices/.NET based on that sandbox failure. Actual doctor outside sandbox:
 temporary WAV, exit code 0. Audible playback was NOT_TESTED.
 
 Production WAV synthesis and doctor share `services/audio/windows_speech.py`
-voice resolution and synchronous `Invoke-ValeraWave`. The doctor waits for
+voice resolution and synchronous `Invoke-RavenWave`. The doctor waits for
 output reset, disposal and process completion before validation. Streaming
 playback/pulse remains in Speaker; health does not invoke dialogue logic.
 Failure data includes stage, requested/resolved voice, culture, bounded exception

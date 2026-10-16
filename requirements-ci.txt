@@ -1,0 +1,5 @@
+# Minimal offline tester + lint environment, Windows/Python 3.12 only.
+# Full developer extras remain in requirements-dev.txt.
+-c constraints-windows-py312.txt
+-r requirements.txt
+ruff==0.16.4

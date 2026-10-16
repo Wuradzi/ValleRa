@@ -15,7 +15,7 @@ from skills.conversation import skill
 class GeminiContextTests(unittest.IsolatedAsyncioTestCase):
     def messages(self):
         return [
-            {"role": "system", "content": "Тебе звати Валера."},
+            {"role": "system", "content": "Тебе звати Рейвен."},
             {"role": "system", "content": "Не виконуй локальних дій."},
             {"role": "user", "content": "Привіт!"},
             {"role": "assistant", "content": "Вітаю."},
@@ -28,7 +28,7 @@ class GeminiContextTests(unittest.IsolatedAsyncioTestCase):
             [c.parts[0].text for c in contents],
             [m["content"] for m in self.messages()[2:]],
         )
-        self.assertEqual(config.system_instruction, "Тебе звати Валера.\n\nНе виконуй локальних дій.")
+        self.assertEqual(config.system_instruction, "Тебе звати Рейвен.\n\nНе виконуй локальних дій.")
         self.assertIsNone(config.safety_settings)
         self.assertIsNone(config.tools)
 
@@ -84,7 +84,7 @@ class NewConversationTests(unittest.IsolatedAsyncioTestCase):
         self.manager.settings = SimpleNamespace(
             history_limit=50, llm_total_timeout_seconds=2, llm_failures_before_switch=3,
         )
-        self.manager.system_prompt = "Тебе звати Валера."
+        self.manager.system_prompt = "Тебе звати Рейвен."
         self.provider = SimpleNamespace(chat=AsyncMock(return_value="Нова відповідь."))
         self.manager.providers = {"gemini": self.provider}
         self.manager.active_name = "gemini"
@@ -109,7 +109,7 @@ class NewConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(AtomicJSONFile(archives[0], {}).load(), self.old_state)
         await self.manager.chat("Нова тема")
         self.assertEqual(self.provider.chat.await_args.args[0], [
-            {"role": "system", "content": "Тебе звати Валера."},
+            {"role": "system", "content": "Тебе звати Рейвен."},
             {"role": "user", "content": "Нова тема"},
         ])
 
@@ -149,7 +149,7 @@ class NewConversationTests(unittest.IsolatedAsyncioTestCase):
         )
         messages = self.provider.chat.await_args.args[0]
         contents, config = GeminiProvider._request(messages)
-        self.assertEqual(config.system_instruction, "Тебе звати Валера.\n\nНе виконуй локальних дій.")
+        self.assertEqual(config.system_instruction, "Тебе звати Рейвен.\n\nНе виконуй локальних дій.")
         self.assertIn("Попередня тема", contents[0].parts[0].text)
         self.assertIn("Синій", contents[1].parts[0].text)
         self.assertTrue(all(c.role == "user" for c in contents[:2]))

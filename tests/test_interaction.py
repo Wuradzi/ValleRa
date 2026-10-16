@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 
 from core.confirmation import ConfirmationService
-from core.app import ValleRaApp
+from core.app import RavenApp
 from core.models import RecognitionResult, SkillResult
 from core.processor import CommandProcessor
 from core.voice_text import repair_voice_text
@@ -17,6 +17,48 @@ from skills.web import skill as web_skill
 
 
 class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cloud_exact_confirmation_and_stale_reply(self):
+        from core.models import RecognitionResult
+        from dataclasses import replace
+        result = RecognitionResult('так', 0, 'groq', confidence_available=False, fragmented=True)
+        for text, expected in [('так', True), ('відміна', False), ('ні', False), ('так відкрий іншу програму', None)]:
+            reply = replace(result, text=text)
+            self.assertIs(ConfirmationService._decision(reply.text, ConfirmationService.voice_confidence(reply)), expected)
+        for flag in ('recognition_unreliable', 'capture_truncated', 'utterance_incomplete', 'incomplete'):
+            reply = replace(result, **{flag: True})
+            self.assertIsNone(ConfirmationService._decision(reply.text, ConfirmationService.voice_confidence(reply)))
+        service = ConfirmationService(AsyncMock(), timeout_seconds=1)
+        task = asyncio.create_task(service.ask('fixture'))
+        await service.wait_until_requested()
+        confidence = ConfirmationService.voice_confidence(result)
+        self.assertIsNone(confidence)  # Unscored, not invented confidence=1.
+        self.assertFalse(service.submit(result.text, 'stale', confidence=confidence))
+        self.assertFalse(task.done())
+        service.submit(result.text, service.request_id, confidence=confidence)
+        self.assertTrue(await task)
+
+    def test_confirmation_voice_grammar_and_asymmetric_thresholds(self):
+        for text in ('так', 'підтверджую', 'ні', 'відміна', 'скасуй'):
+            self.assertIn(text, ConfirmationService.GRAMMAR)
+        self.assertNotIn('гаразд', ConfirmationService.GRAMMAR)
+        self.assertIs(ConfirmationService._decision('гаразд', .95), True)
+        self.assertIsNone(ConfirmationService._decision('гаразд', .615))
+        self.assertIsNone(ConfirmationService._decision('так', .615))
+        self.assertIs(ConfirmationService._decision('відміна', .615), False)
+        self.assertIsNone(ConfirmationService._decision('відміна', .49))
+
+    async def test_moderate_confidence_cancel_is_correlated_not_timeout(self):
+        from core.confirmation import ConfirmationPrompt
+        service = ConfirmationService(AsyncMock(), timeout_seconds=1)
+        prompt = ConfirmationPrompt('fixture', 'fixture')
+        task = asyncio.create_task(service.ask(prompt))
+        await service.wait_until_requested()
+        self.assertFalse(service.submit('відміна', 'old-request', confidence=.61))
+        self.assertFalse(task.done())
+        service.submit('відміна', service.request_id, confidence=.61)
+        self.assertFalse(await asyncio.wait_for(task, .5))
+        self.assertEqual(prompt.outcome, 'declined')
+
     def test_exact_confirmation_semantics_and_uncertainty(self):
         for text in ('так', 'гаразд', 'підтверджую', ' Так! '):
             self.assertIs(ConfirmationService._decision(text, .95), True)
@@ -25,7 +67,7 @@ class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(text, ConfirmationService.GRAMMAR)
         for text in ('можливо', '<UNK>', '<UNK> так', 'не так', 'так ні', 'підтвердити пізніше'):
             self.assertIsNone(ConfirmationService._decision(text, 1))
-        for score in (.52, 0, float('nan'), float('inf'), 1.1):
+        for score in (.49, 0, float('nan'), float('inf'), 1.1):
             self.assertIsNone(ConfirmationService._decision('так', score))
             self.assertIsNone(ConfirmationService._decision('ні', score))
 
@@ -99,6 +141,227 @@ class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CommandProcessorModeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_groq_memory_is_local_confirmed_and_rejects_fragments(self):
+        from core.models import TurnEnvelope
+        from dataclasses import replace
+        self.services['enabled_skills'] = {'memory'}
+        self.services['memory'] = SimpleNamespace(all=Mock(return_value=[]), remember=Mock())
+        self.llm.converse = AsyncMock()
+        text = 'Запам’ятай проєкт: Рейвен'
+        turn = TurnEnvelope(turn_id='memory', session_id='test', source='voice', text=text,
+            transcript=text, stt_engine='groq', confidence=0, confidence_available=False, action_eligible=False)
+        approval = AsyncMock(return_value=True)
+        await self.processor.process(replace(turn, utterance_incomplete=True), approval)
+        approval.assert_not_awaited()
+        self.services['memory'].remember.assert_not_called()
+        await self.processor.process(turn, approval)
+        approval.assert_awaited_once()
+        self.services['memory'].remember.assert_called_once_with('проєкт', 'Рейвен', category='user_explicit')
+        self.llm.converse.assert_not_awaited()
+
+    async def test_unscored_llm_error_keeps_actual_cause(self):
+        from core.models import TurnEnvelope
+        from core.natural_turn import NaturalTurn
+        text = 'Акторство?'
+        self.llm.converse = AsyncMock(return_value=NaturalTurn('unavailable', 'Не вдалося розібрати відповідь моделі.'))
+        turn = TurnEnvelope(turn_id='error', session_id='test', source='voice', text=text,
+            transcript=text, stt_engine='groq', confidence=0, confidence_available=False, action_eligible=False)
+        result = await self.processor.process(turn, AsyncMock())
+        self.assertEqual(result.response, 'Не вдалося розібрати відповідь моделі.')
+        self.assertEqual(result.data['command_type'], 'llm_unavailable')
+
+    async def test_groq_scoped_app_reply_still_requires_fresh_approval(self):
+        from core.models import TurnEnvelope
+        from core.natural_turn import NaturalTurn
+        from core.command_intent import CommandIntent
+        self.processor.settings.natural_actions_enabled = True
+        self.services['enabled_skills'] = {'apps'}
+        launch = Mock(return_value=True)
+        self.services['apps'] = SimpleNamespace(open_default_browser=launch)
+
+        def envelope(text):
+            return TurnEnvelope(turn_id=text, session_id='test', source='voice', text=text,
+                transcript=text, stt_engine='groq', confidence=0, confidence_available=False,
+                action_eligible=False)
+
+        for kind, reply in ((kind, reply) for kind in ('chat', 'clarify') for reply in ('так', 'відміна', 'браузер')):
+            self.llm.converse = AsyncMock(return_value=NaturalTurn(kind, 'Яку програму відкрити?'))
+            await self.processor.process(envelope('А ти можеш мені відкрити програму?'), AsyncMock())
+            self.llm.converse.return_value = NaturalTurn('action', intent=CommandIntent('open_app', {'name': 'браузер'}))
+            approval = AsyncMock(return_value=False)
+            await self.processor.process(envelope(reply), approval)
+            self.assertEqual(approval.await_count, int(reply == 'браузер'))
+            launch.assert_not_called()
+
+    async def test_short_confirmation_prompt_and_vidmina_cancel(self):
+        from core.confirmation import ConfirmationPrompt
+        speak = AsyncMock()
+        confirmation = ConfirmationService(speak, timeout_seconds=1)
+        task = asyncio.create_task(confirmation.ask(ConfirmationPrompt('браузер', 'Відкрити браузер', short_question=True)))
+        await confirmation.wait_until_requested()
+        confirmation.submit('відміна', confirmation.request_id, confidence=.95)
+        self.assertFalse(await task)
+        self.assertEqual(speak.call_args_list[0].args[0], 'Відкрити браузер?')
+
+    async def test_groq_exact_app_skips_llm_but_keeps_confirmation(self):
+        from core.models import TurnEnvelope
+        self.processor.settings.natural_actions_enabled = True
+        self.services['enabled_skills'] = {'apps'}
+        launch = Mock(return_value=True)
+        self.services['apps'] = SimpleNamespace(has_exact_name=Mock(return_value=True),
+                                                open_default_browser=launch)
+        self.llm.converse = AsyncMock()
+        for approved in (False, True):
+            launch.reset_mock()
+            text = 'А ти можеш відкрити мені програму браузер, будь ласка?'
+            turn = TurnEnvelope(turn_id='exact:test', session_id='test', source='voice',
+                text=text, transcript=text, stt_engine='groq', confidence=0,
+                confidence_available=False, action_eligible=False)
+
+            async def confirm(prompt):
+                launch.assert_not_called()
+                self.assertIn('браузер', prompt)
+                return approved
+
+            approval = AsyncMock(side_effect=confirm)
+            await self.processor.process(turn, approval)
+            approval.assert_awaited_once()
+            self.assertEqual(launch.call_count, int(approved))
+            self.llm.converse.assert_not_awaited()
+
+    async def test_groq_candidate_requires_specific_confirmation_before_execution(self):
+        from core.models import TurnEnvelope
+        from core.natural_turn import NaturalTurn
+        from core.command_intent import CommandIntent
+        self.processor.settings.natural_actions_enabled = True
+        self.services['enabled_skills'] = {'apps'}
+        app_open = Mock(return_value=True)
+        self.services['apps'] = SimpleNamespace(open_default_browser=app_open)
+        self.llm.converse = AsyncMock(return_value=NaturalTurn(
+            'action', intent=CommandIntent('open_app', {'name': 'браузер'})))
+        for approved in (False, True):
+            app_open.reset_mock()
+            text = 'Команда: відкрий браузер'
+            turn = TurnEnvelope(turn_id='groq:test', session_id='test', source='voice', text=text,
+                transcript=text, stt_engine='groq', confidence=0,
+                confidence_available=False, action_eligible=False)
+
+            async def confirm(prompt):
+                app_open.assert_not_called()
+                self.assertIn('браузер', prompt)
+                return approved
+
+            approval = AsyncMock(side_effect=confirm)
+            result = await self.processor.process(turn, approval)
+            approval.assert_awaited_once()
+            self.assertEqual(app_open.call_count, int(approved))
+            self.assertEqual(result.execution.status.value,
+                             'submitted_unverified' if approved else 'cancelled')
+            self.assertFalse(turn.action_eligible)
+        self.assertEqual(self.router.commands, [])
+
+    async def test_groq_candidate_rejects_unsafe_or_indirect_requests(self):
+        from core.models import TurnEnvelope
+        from core.natural_turn import NaturalTurn
+        from core.command_intent import CommandIntent
+        self.processor.settings.natural_actions_enabled = True
+        self.llm.converse = AsyncMock(return_value=NaturalTurn(
+            'action', intent=CommandIntent('open_app', {'name': 'браузер'})))
+        for text, flags, allowed in (
+            ('не відкривай браузер', {}, True), ('так', {}, True),
+            ('відкрий браузер', {'recognition_unreliable': True}, True),
+            ('відкрий браузер', {'utterance_incomplete': True}, True),
+            ('відкрий браузер', {'capture_truncated': True}, True),
+            ('відкрий браузер', {'clarification_required': True}, True),
+            ('відкрий браузер', {}, False),
+        ):
+            turn = TurnEnvelope(turn_id='groq:test', session_id='test', source='voice', text=text,
+                transcript=text, stt_engine='groq', confidence=0,
+                confidence_available=False, action_eligible=False, **flags)
+            approval = AsyncMock(return_value=True)
+            with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+                await self.processor.process(turn, approval, allow_actions=allowed)
+                execute.assert_not_awaited()
+            approval.assert_not_awaited()
+
+    async def test_unscored_groq_chat_reaches_llm_but_never_executes(self):
+        from core.natural_turn import NaturalTurn
+        from core.command_intent import CommandIntent
+        from core.models import RecognitionResult
+        app = RavenApp.__new__(RavenApp)
+        app.command_queue = asyncio.Queue()
+        app.command_idle = asyncio.Event()
+        app.running = True
+        app.web_ui = None
+        app.settings = SimpleNamespace(stt_command_confidence_threshold=.55, stt_chat_confidence_threshold=.5)
+        app.services = self.services
+        app.speaker = SimpleNamespace(say=AsyncMock(), generation=0)
+        app.confirmation = SimpleNamespace(ask=AsyncMock())
+        app.processor = self.processor
+        for kind, fragment in ((kind, fragment) for kind in ('chat', 'clarify', 'action') for fragment in (False, True)):
+            self.llm.converse = AsyncMock(return_value=NaturalTurn(kind, 'Відповідь',
+                CommandIntent('open_app', {'name': 'браузер'}) if kind == 'action' else None))
+            result = RecognitionResult('Розкажи щось цікаве.', 0, 'groq', fragmented=True,
+                                       confidence_available=False, incomplete=fragment, utterance_incomplete=fragment)
+            turn = await app._enqueue_command(result.text, 'voice', 0, recognition=result)
+            self.assertFalse(turn.confidence_available)
+            self.assertFalse(turn.action_eligible)
+            self.assertEqual(turn.clarification_required, fragment)
+            with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+                task = asyncio.create_task(app._command_loop())
+                try:
+                    await asyncio.wait_for(app.command_queue.join(), 2)
+                    self.llm.converse.assert_awaited_once()
+                    execute.assert_not_awaited()
+                    app.confirmation.ask.assert_not_awaited()
+                    self.assertEqual(self.router.commands, [])
+                finally:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+    async def test_unscored_cannot_consume_pending_selection_or_execute_explicit_action(self):
+        from core.models import TurnEnvelope
+        self.services['tasks'] = SimpleNamespace(pending=object(), consume=AsyncMock())
+        self.llm.converse = AsyncMock(return_value=SimpleNamespace(kind='chat', response='chat'))
+        for text in ('Команда: відкрий браузер', 'Telegram', 'так', 'стоп'):
+            turn = TurnEnvelope(turn_id='test', session_id='test', source='voice', text=text,
+                transcript=text, stt_engine='groq', confidence=0, confidence_available=False,
+                action_eligible=True)  # Processor must defend even against an inconsistent envelope.
+            confirm = AsyncMock()
+            with patch('core.processor.execute_intent', new_callable=AsyncMock) as execute:
+                await self.processor.process(turn, confirm)
+                execute.assert_not_awaited()
+                confirm.assert_not_awaited()
+        self.services['tasks'].consume.assert_not_awaited()
+        self.assertEqual(self.router.commands, [])
+
+    async def test_unscored_bypass_rejects_failures_fragments_and_local_commands(self):
+        from core.models import RecognitionResult
+        app = RavenApp.__new__(RavenApp)
+        app.command_queue = asyncio.Queue()
+        app.command_idle = asyncio.Event()
+        app.running = True
+        app.web_ui = None
+        app.settings = SimpleNamespace(stt_command_confidence_threshold=.55, stt_chat_confidence_threshold=.5)
+        app.services = self.services
+        app.speaker = SimpleNamespace(say=AsyncMock(), generation=0)
+        app.confirmation = SimpleNamespace(ask=AsyncMock())
+        app.processor = SimpleNamespace(process=AsyncMock())
+        for kwargs in ({'recognition_unreliable': True}, {'capture_truncated': True},
+                       {'incomplete': True, 'utterance_incomplete': False},
+                       {'confidence_available': True}, {'text': 'Команда: відкрий браузер'}):
+            values = dict(text='Привіт', confidence=0, engine='groq', fragmented=True, confidence_available=False)
+            values.update(kwargs)
+            result = RecognitionResult(**values)
+            await app._enqueue_command(result.text, 'voice', result.confidence, recognition=result)
+            task = asyncio.create_task(app._command_loop())
+            try:
+                await asyncio.wait_for(app.command_queue.join(), 2)
+                app.processor.process.assert_not_awaited()
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     async def test_natural_boundaries_keep_turn_id_and_confirm_before_single_execution(self):
         from core.natural_turn import NaturalTurn
         from core.command_intent import CommandIntent
@@ -168,7 +431,7 @@ class CommandProcessorModeTests(unittest.IsolatedAsyncioTestCase):
     async def test_operational_turn_id_reaches_real_processor_and_command_context(self):
         from core.performance import TurnTiming, DISABLED_PERFORMANCE
         from core.models import TurnEnvelope
-        app = object.__new__(ValleRaApp)
+        app = object.__new__(RavenApp)
         app.command_queue = asyncio.Queue()
         app.command_idle = asyncio.Event()
         app.running = True
@@ -279,9 +542,9 @@ class CommandProcessorModeTests(unittest.IsolatedAsyncioTestCase):
         self.llm.chat.assert_awaited_once()
         self.assertEqual(self.router.commands, [])
 
-    async def test_addressing_valera_does_not_create_command_permission(self):
+    async def test_addressing_raven_does_not_create_command_permission(self):
         result = await self.processor.process(
-            "Валера, команда відкрий браузер",
+            "Рейвен, команда відкрий браузер",
             AsyncMock(return_value=True),
             "voice",
         )
@@ -482,7 +745,7 @@ class AppCommandLoopTests(unittest.IsolatedAsyncioTestCase):
         app.processor.process = AsyncMock(
             return_value=SkillResult(
                 True,
-                "Завершую роботу Валери.",
+                "Завершую роботу Рейвена.",
                 {"shutdown_app": True},
             )
         )
@@ -616,7 +879,7 @@ class SkillIntentTests(unittest.IsolatedAsyncioTestCase):
                 search=AsyncMock(
                     return_value=[
                         {
-                            "title": "ValleRa",
+                            "title": "Raven",
                             "body": "Локальний голосовий асистент.",
                             "href": "https://example.test",
                         }
@@ -626,9 +889,9 @@ class SkillIntentTests(unittest.IsolatedAsyncioTestCase):
             "llm": llm,
         }
 
-        result = await web_skill.handle("пошукай valera", SimpleNamespace(), services)
+        result = await web_skill.handle("пошукай raven", SimpleNamespace(), services)
 
-        self.assertIn("ValleRa", result.response)
+        self.assertIn("Raven", result.response)
         llm.chat.assert_not_awaited()
 
     async def test_web_search_accepts_query_before_or_after_location(self):
@@ -686,7 +949,7 @@ class _LLM:
 
 
 def _command_loop_app(confidence_threshold: float):
-    app = object.__new__(ValleRaApp)
+    app = object.__new__(RavenApp)
     app.web_ui = None
     app.running = True
     app.command_queue = asyncio.Queue()
@@ -712,7 +975,7 @@ def _command_loop_app(confidence_threshold: float):
 
 
 def _voice_loop_app():
-    app = object.__new__(ValleRaApp)
+    app = object.__new__(RavenApp)
     app.web_ui = None
     app._mic_ready = asyncio.Event()
     app._mic_ready.set()

@@ -42,7 +42,7 @@ from services.platform import resolve_platform
 logger = logging.getLogger(__name__)
 
 
-class ValleRaApp:
+class RavenApp:
     def __init__(self, settings, secret_store, text_only: bool = False, *, performance=None):
         self.settings = settings
         self.platform = resolve_platform()
@@ -166,7 +166,7 @@ class ValleRaApp:
             # High-frequency visual telemetry must not evict conversation events.
             self.speaker.on_glow = self.web_ui.changed.set
 
-        console_print("=== ValleRa запущена ===")
+        console_print("=== Raven запущений ===")
         console_print("Текст «стоп» зупиняє відповідь; нове текстове повідомлення перериває попередню озвучку.")
         print(
             f"[PERF] Профіль: {self.settings.performance_profile}; "
@@ -179,7 +179,7 @@ class ValleRaApp:
         if self.text_only:
             console_print("Введіть повідомлення. Явний резервний формат: «Команда: <дія>».")
         else:
-            console_print("Говоріть природно — ValleRa слухає без слова активації.")
+            console_print("Говоріть природно — Raven слухає без слова активації.")
             console_print("Прохання без слова Команда аналізує LLM; дії виконуються після підтвердження."
                           if self.settings.natural_actions_enabled else
                           "Звичайна репліка → розмова; «Команда: <дія>» → локальна дія.")
@@ -306,12 +306,7 @@ class ValleRaApp:
             source=source, text=text, transcript=recognition.text if recognition is not None else text,
             stt_engine=recognition.engine if recognition is not None else ('text' if source == 'text' else 'unknown'),
             confidence=confidence,
-            utterance_incomplete=(recognition.utterance_incomplete if recognition.utterance_incomplete is not None
-                                  else recognition.incomplete) if recognition is not None else False,
-            capture_truncated=recognition.capture_truncated if recognition is not None else False,
-            recognition_unreliable=recognition.recognition_unreliable if recognition is not None else False,
-            action_eligible=RecognitionPolicy.action_eligible(recognition) if recognition is not None else True,
-            clarification_required=recognition.incomplete if recognition is not None else False,
+            **(RecognitionPolicy.turn_flags(recognition) if recognition is not None else {}),
             timing=recognition.timing if recognition is not None else None,
         )
         try:
@@ -356,11 +351,21 @@ class ValleRaApp:
                         self.settings.stt_command_confidence_threshold if is_local
                         else self.settings.stt_chat_confidence_threshold
                     )
-                    if not math.isfinite(confidence) or confidence < threshold:
+                    unscored_chat = (not turn.confidence_available and not turn.action_eligible
+                        and not turn.recognition_unreliable and not turn.capture_truncated
+                        and (not turn.clarification_required or turn.utterance_incomplete)
+                        and (not is_local or (turn.stt_engine == 'groq'
+                            and getattr(self.settings, 'natural_actions_enabled', False)
+                            and COMMAND_PREFIX.match(text.strip())))
+                        and self.services['state'].get('mode', 'chat') == 'chat')
+                    if not math.isfinite(confidence) or (confidence < threshold and not unscored_chat):
                         await self.speaker.say(
                             "Не розібрав фразу. Повторіть її, будь ласка."
                         )
                         continue
+
+                    if unscored_chat:
+                        logger.info('stt.unscored_chat confidence_available=false action_eligible=false')
 
                 result = await self.processor.process(
                     turn,
@@ -416,7 +421,12 @@ class ValleRaApp:
                         float(self.settings.confirmation_timeout_seconds),
                         ConfirmationService.GRAMMAR,
                     )
-                    decision = ConfirmationService._decision(result.text, result.confidence)
+                    from core.voice_diagnostics import recognition_reason
+                    reply_confidence = ConfirmationService.voice_confidence(result)
+                    logger.info('confirmation_capture outcome=%s request=%s confidence_available=%s',
+                                recognition_reason(result), confirmation_id[:8] if confirmation_id else 'none',
+                                result.confidence_available)
+                    decision = ConfirmationService._decision(result.text, reply_confidence)
                     logger.info("confirmation_voice recognized=%r engine=%s confidence=%.3f semantic=%s request=%s",
                                 redact_user_text(result.text), result.engine, result.confidence,
                                 'confirm' if decision is True else 'deny' if decision is False else 'unknown',
@@ -429,7 +439,7 @@ class ValleRaApp:
                             f"[CONFIRM VOICE/{result.engine} "
                             f"{result.confidence:.2f}] {safe_text}"
                         )
-                        if self.confirmation.submit(result.text, confirmation_id, confidence=result.confidence):
+                        if self.confirmation.submit(result.text, confirmation_id, confidence=reply_confidence):
                             await self.confirmation.wait_until_response_processed()
                     continue
 
@@ -443,10 +453,13 @@ class ValleRaApp:
                     )
                     continue
                 if not result.text:
+                    from core.voice_diagnostics import recognition_reason
+                    logger.info('voice_input_discarded reason=%s engine=%s', recognition_reason(result), result.engine)
                     continue
 
+                confidence_label = f'{result.confidence:.2f}' if result.confidence_available else 'unscored'
                 print(
-                    f"[VOICE/{result.engine} {result.confidence:.2f}] "
+                    f"[VOICE/{result.engine} {confidence_label}] "
                     f"{redact_user_text(result.text)}"
                 )
                 repaired_text = result.text if result.fragmented else repair_voice_text(
@@ -703,7 +716,12 @@ class ValleRaApp:
         else:
             status = "ready"
         task = self._task_progress().current()
+        stt_profile = getattr(self.listener, 'profile', None)
+        stt_active = 'groq' if getattr(stt_profile, 'backend', None) == 'groq' else 'local'
         return {"status": status, "microphone": self.microphone_enabled,
+                "stt_active": stt_active if self.listener is not None else 'disabled',
+                "stt_saved": getattr(self, '_stt_saved_selection', stt_active),
+                "stt_restart_required": hasattr(self, '_stt_saved_selection') and self._stt_saved_selection != stt_active,
                 "microphone_available": self.listener is not None and not self._voice_unavailable,
                 "microphone_stopping": not self.microphone_enabled and self._voice_inflight,
                 "paused": self.processor.conversation_paused,
@@ -717,7 +735,20 @@ class ValleRaApp:
                 "tts_glow": self.speaker.glow_state()}
 
     async def web_control(self, action, data):
-        if action == 'cancel_progress':
+        if action == 'stt_backend':
+            selection = data.get('backend')
+            if selection not in ('local', 'groq'):
+                return 400, {'error': 'Оберіть локальну модель або Groq.'}
+            if selection == 'groq' and data.get('cloud_consent') is not True:
+                return 400, {'error': 'Підтвердіть передачу голосових реплік до Groq.'}
+            from services.audio.selection import save_selection
+            try:
+                save_selection(self.settings, selection)
+            except (OSError, ValueError, TypeError, KeyError):
+                return 400, {'error': 'Не вдалося зберегти вибір STT. Перевірте config.json і локальний профіль.'}
+            self._stt_saved_selection = selection
+            return 200, {'ok': True, 'message': 'Вибір збережено. Перезапустіть Raven, щоб застосувати його.'}
+        elif action == 'cancel_progress':
             if not self._task_progress().cancel(data.get('kind'), data.get('task_id')):
                 return 409, {'error': 'Це завдання вже неактивне або змінилося.'}
         elif action == 'cancel_search':

@@ -182,6 +182,10 @@ def public_report(value, key=''):
     if not isinstance(value, str):
         return value
     allowed = {'Windows', 'Linux', 'Darwin', 'AMD64', 'x86_64', 'aarch64', 'arm64',
+        'groq', 'whisper-large-v3-turbo', 'whisper-large-v3', 'cloud', 'remote', 'local',
+        'client_only', 'local_inference', 'cloud_stt_backend_comparison', 'cloud_not_authorized',
+        'missing_key', 'authorization', 'rate_limit', 'server', 'network', 'malformed_response',
+        'empty_transcription', 'http_error', 'client_error', 'invalid_audio',
         'cpu', 'cuda', 'auto', 'int8', 'float32', 'float16', 'int8_float16', 'unknown',
         'vosk', 'whisper', 'faster-whisper', 'sherpa-onnx', 'moonshine-onnx', 'moonshine',
         'tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo', 'configured-vosk',

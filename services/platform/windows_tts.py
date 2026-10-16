@@ -70,7 +70,7 @@ def start(self) -> None:
     # A missing compiler/adapter must never make the voice unavailable.
     pulse_setup = (
         "$pulseReady = $false; "
-        "try { Add-Type -Path $env:VALLERA_PULSE_SOURCE "
+        "try { Add-Type -Path $env:RAVEN_PULSE_SOURCE "
         "-ReferencedAssemblies ([System.Speech.Synthesis.SpeechSynthesizer].Assembly.Location) "
         "-ErrorAction Stop -WarningAction SilentlyContinue; "
         "$pulseReady = $true "
@@ -83,17 +83,17 @@ def start(self) -> None:
         "Add-Type -AssemblyName System.Speech; "
         "$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
         + pulse_setup +
-        "$hint = $env:VALLERA_TTS_HINT; "
-        "Resolve-ValeraVoice $speaker $hint; "
+        "$hint = $env:RAVEN_TTS_HINT; "
+        "Resolve-RavenVoice $speaker $hint; "
         f"$speaker.Rate = {rate}; $speaker.Volume = {volume}; "
         "try { while ($null -ne ($line = [Console]::In.ReadLine())) { "
         "try { $request = ConvertFrom-Json -InputObject $line; "
         "if ($request.text) { "
         "$pcmOutput = $null; "
-        "if ($request.path) { Invoke-ValeraWave $speaker ([string]$request.text) ([string]$request.path) $true } else { "
+        "if ($request.path) { Invoke-RavenWave $speaker ([string]$request.text) ([string]$request.path) $true } else { "
         "if ($pulseReady) { try { "
-        "$pcmOutput = New-Object ValeraSpeechAudio; "
-        "$speaker.SetOutputToAudioStream($pcmOutput, [ValeraSpeechAudio]::Format) "
+        "$pcmOutput = New-Object RavenSpeechAudio; "
+        "$speaker.SetOutputToAudioStream($pcmOutput, [RavenSpeechAudio]::Format) "
         "} catch { if ($null -ne $pcmOutput) { $pcmOutput.Dispose(); $pcmOutput = $null }; "
         "$pulseReady = $false; "
         "[Console]::Out.WriteLine('{\"event\":\"pulse_unavailable\"}'); "
@@ -127,8 +127,8 @@ def start(self) -> None:
         bufsize=1,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         env=sanitized_environment({
-            "VALLERA_TTS_HINT": self.settings.tts_voice_hint,
-            "VALLERA_PULSE_SOURCE": str(Path(__file__).resolve().parents[1] / "audio" / "speech_pulse.cs"),
+            "RAVEN_TTS_HINT": self.settings.tts_voice_hint,
+            "RAVEN_PULSE_SOURCE": str(Path(__file__).resolve().parents[1] / "audio" / "speech_pulse.cs"),
         }),
     )
     responses = queue.Queue()

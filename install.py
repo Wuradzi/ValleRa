@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Інсталятор ValleRa")
+    parser = argparse.ArgumentParser(description="Інсталятор Raven")
     parser.add_argument(
         "--profile",
         choices=("desktop", "edge", "raspberry_pi"),

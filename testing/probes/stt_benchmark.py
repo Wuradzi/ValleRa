@@ -92,11 +92,14 @@ def aggregate(rows):
             'realtime_factor': sum(r['latency_ms'] for r in rows) / 1000 / sum(r['audio_seconds'] for r in rows)}
 
 
-def _variant(connection, directory, candidate, device, checkpoint=None):
+def _variant(connection, directory, candidate, device, checkpoint=None, allow_cloud=False):
     backend = None
     monitor = VoiceResources(checkpoint).start()
     report = {'candidate': candidate, 'requested_model': candidate['model'], 'rows': [], **environment()}
     try:
+        if candidate['backend'] == 'groq' and not allow_cloud:
+            report.update(status='NOT_TESTED', reason='cloud_not_authorized')
+            return
         from config import load_settings
         from services.audio.backends import create_backend
         from services.audio.profiles import resolve_profile
@@ -110,6 +113,9 @@ def _variant(connection, directory, candidate, device, checkpoint=None):
         # Benchmark variants are reproducible, independent of personal hint tuning.
         settings.stt_whisper_prompt = settings.stt_whisper_hotwords = ''
         profile, capabilities = resolve_profile(settings)
+        cloud = profile.backend == 'groq'
+        report.update(execution_location='cloud' if cloud else 'local',
+                      resource_scope='client_only' if cloud else 'local_inference', failures=0)
         report.update(profile=asdict(profile), hardware=asdict(capabilities))
         from services.audio.cuda_diagnostics import runtime_versions
         report['versions'] = runtime_versions()
@@ -124,6 +130,9 @@ def _variant(connection, directory, candidate, device, checkpoint=None):
             backend = MoonshineCandidate(settings.paths.project_root / profile.model, settings.stt_whisper_cpu_threads)
         else:
             backend = create_backend(settings, profile, process=False)
+        if cloud:
+            from core.security import scrub_sensitive_environment
+            scrub_sensitive_environment()
         if profile.backend == 'faster-whisper':
             backend.recognizer.settings.benchmark_word_timestamps = candidate.get('word_timestamps', True)
             backend.recognizer.settings.benchmark_decode_options = (
@@ -152,8 +161,9 @@ def _variant(connection, directory, candidate, device, checkpoint=None):
             monitor.inference()
             _, pcm, rate, _ = samples[0]
             started = time.perf_counter()
-            backend.transcribe(pcm, rate)
-            report['first_inference_ms'] = (time.perf_counter() - started) * 1000
+            if not cloud:  # Do not upload/bill a hidden warmup copy of the first WAV.
+                backend.transcribe(pcm, rate)
+                report['first_inference_ms'] = (time.perf_counter() - started) * 1000
             if profile.backend == 'faster-whisper':
                 if backend.recognizer.last_error:
                     raise RuntimeError('warmup failed: ' + backend.recognizer.last_error)
@@ -162,6 +172,13 @@ def _variant(connection, directory, candidate, device, checkpoint=None):
             for row, pcm, rate, duration in samples:
                 started = time.perf_counter()
                 result = backend.transcribe(pcm, rate)
+                if cloud and backend.last_error:
+                    report['failures'] += 1
+                    report['failed_id'] = row['id']
+                    report['error_class'] = backend.last_error
+                    report['http_status'] = backend.last_metrics.get('http_status')
+                    report['status'] = 'failed'
+                    break  # Quota/auth/network failure: no blind corpus retries.
                 if profile.backend == 'faster-whisper':
                     if backend.recognizer.last_error:
                         raise RuntimeError(backend.recognizer.last_error)
@@ -171,7 +188,9 @@ def _variant(connection, directory, candidate, device, checkpoint=None):
                     'engine': result.engine, 'confidence': result.confidence,
                     'audio_seconds': duration, 'latency_ms': (time.perf_counter() - started) * 1000,
                     **scores(row['reference'], result.text), **semantic_scores(row.get('semantic'), result.text)})
-            report.update(status='completed', summary=aggregate(report['rows']),
+            if report['rows']:
+                report['summary'] = aggregate(report['rows'])
+            report.update(status='failed' if report['failures'] else 'completed',
                           empty_transcripts=sum(not r['transcript'].strip() for r in report['rows']))
     except Exception as exc:
         report.update(status='failed', reason=type(exc).__name__)
@@ -204,8 +223,10 @@ def read_matrix(args):
             raise ValueError('Invalid candidate')
         if any(not isinstance(entry.get(k), str) or not entry[k] for k in ('id', 'backend', 'model')):
             raise ValueError('Candidate id/backend/model required')
-        if entry['id'] in seen or entry['backend'] not in {'vosk', 'faster-whisper', 'sherpa-onnx', 'moonshine-onnx'}:
+        if entry['id'] in seen or entry['backend'] not in {'vosk', 'faster-whisper', 'sherpa-onnx', 'moonshine-onnx', 'groq'}:
             raise ValueError('Duplicate/invalid candidate')
+        if entry['backend'] == 'groq' and entry['model'] not in {'whisper-large-v3-turbo', 'whisper-large-v3'}:
+            raise ValueError('Invalid Groq model')
         seen.add(entry['id'])
         for option in ('word_timestamps', 'single_pass'):
             if option in entry and (type(entry[option]) is not bool or entry['backend'] != 'faster-whisper'):
@@ -231,17 +252,22 @@ def run(args):
                            corpus_duration_seconds=sum(r[3] for r in samples))
     del samples  # Do not retain a second PCM corpus in the parent on small Pi RAM.
     candidates = read_matrix(args)
+    cloud = any(c['backend'] == 'groq' for c in candidates)
+    if cloud and not getattr(args, 'cloud', False):
+        raise ValueError('Groq corpus upload requires explicit --cloud in addition to --allow-live')
     root = Path(__file__).resolve().parents[2]
     folder = root / 'logs' / 'stt-benchmark' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid4().hex[:8])
     folder.mkdir(parents=True)
     report = {'kind': 'offline_stt_backend_comparison', 'network': False, 'llm_correction': False,
               'normalization': 'NFKC/casefold/punctuation removed; CER includes normalized spaces', 'variants': []}
+    if cloud:
+        report.update(kind='cloud_stt_backend_comparison', network=True)
     context = multiprocessing.get_context('spawn')
     for candidate in candidates:
-        checkpoint_dir = tempfile.TemporaryDirectory(prefix='valera-benchmark-')
+        checkpoint_dir = tempfile.TemporaryDirectory(prefix='raven-benchmark-')
         checkpoint = Path(checkpoint_dir.name) / 'resources.json'
         parent, child = context.Pipe(duplex=False)
-        worker = context.Process(target=_variant, args=(child, args.corpus, candidate, args.device, checkpoint))
+        worker = context.Process(target=_variant, args=(child, args.corpus, candidate, args.device, checkpoint, cloud))
         worker.start()
         child.close()
         try:
@@ -263,6 +289,8 @@ def run(args):
                 entry['resources_partial'] = True
             checkpoint_dir.cleanup()
         entry = {**environment(), **corpus_metadata, **entry}
+        if candidate['backend'] == 'groq':
+            entry.update(execution_location='cloud', resource_scope='client_only')
         entry = public_report(entry)
         report['variants'].append(entry)
         (folder / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

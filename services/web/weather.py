@@ -10,7 +10,7 @@ class WeatherService:
             response = await client.get(
                 f"https://wttr.in/{quote(city, safe='')}",
                 params={"format": "j1", "lang": "uk"},
-                headers={"User-Agent": "ValleRa/0.1"},
+                headers={"User-Agent": "Raven/0.1"},
             )
             response.raise_for_status()
             return response.json()
