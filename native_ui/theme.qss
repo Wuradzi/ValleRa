@@ -1,0 +1,30 @@
+QWidget { color: #e5dff4; font-family: "Segoe UI"; font-size: 14px; }
+QWidget#background { background: #0b0b15; }
+QFrame#card { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #242433,stop:0.6 #13131f,stop:1 #1b1929); border: 1px solid #695485; border-radius: 30px; }
+QLabel { background: transparent; border: none; }
+QLabel#status { font-size: 30px; color: #f6f1ff; }
+QLabel#detail { font-size: 12px; color: #bdb4d2; }
+QLabel#spark { color: #ae79f4; font-size: 28px; }
+QLabel#notice { color: #e1cca5; padding: 8px; }
+QPushButton { background: #292436; border: 1px solid #785997; border-radius: 10px; padding: 7px 12px; }
+QPushButton:hover { background: #3b2b51; border-color: #bd7fff; }
+QPushButton:focus { border: 2px solid #d5b4ff; }
+QPushButton:disabled { color: #766b86; background: #211d2a; border-color: #41354f; }
+QPushButton#round { border-radius: 28px; padding: 14px; }
+QPushButton#round:checked { background: #593481; border-color: #bd7fff; }
+QPushButton#settings { background: transparent; border: none; padding: 7px; }
+QPushButton#primary { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #a65bea,stop:1 #6532bb); border-radius: 13px; }
+QPushButton#primary:disabled { background: #40304f; }
+QFrame#composer { background: #282238; border: 1px solid #8664ad; border-radius: 20px; }
+QPlainTextEdit { background: transparent; color: #e5dff4; border: none; padding: 4px; selection-background-color: #643e8f; }
+QFrame#bubble { background: #13101e; border-radius: 15px; }
+QFrame#user { background: #292037; border-radius: 15px; }
+QFrame#confirmation { background: #33263a; border: 1px solid #d4b073; border-radius: 12px; }
+QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
+QScrollBar:vertical { width: 9px; background: transparent; }
+QScrollBar::handle:vertical { background: #70508e; border-radius: 4px; min-height: 25px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QDialog, QMessageBox { background: #201d2c; }
+QComboBox { background: #30263f; border: 1px solid #785997; border-radius: 8px; padding: 8px; }
+QComboBox QAbstractItemView { background: #242030; selection-background-color: #643e8f; }
+QCheckBox { padding: 5px; }

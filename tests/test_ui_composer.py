@@ -6,6 +6,35 @@ from pathlib import Path
 
 
 class UIComposerTests(unittest.TestCase):
+    def test_raven_layout_preserves_interactive_hooks(self):
+        from html.parser import HTMLParser
+        from collections import Counter
+
+        class Elements(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.ids = []
+
+            def handle_starttag(self, tag, attrs):
+                self.ids.extend(value for name, value in attrs if name == 'id')
+
+        root = Path(__file__).resolve().parents[1]
+        html = (root / 'web_ui/index.html').read_text(encoding='utf-8')
+        parser = Elements()
+        parser.feed(html)
+        counts = Counter(parser.ids)
+        self.assertTrue(all(count == 1 for count in counts.values()))
+        for hook in ('message', 'send', 'microphone', 'history-toggle',
+                     'confirmation', 'accept', 'reject', 'agent-task',
+                     'cancel-task', 'about-dialog'):
+            self.assertEqual(counts[hook], 1, hook)
+        self.assertIn('class="raven-eye"', html)
+        self.assertIn('class="raven-ring"', html)
+        self.assertNotIn('face-outline', html)
+        self.assertNotIn('mouth-wave', html)
+        self.assertNotIn('id="stop"', html)
+        self.assertIn('class="stop-icon"', html)
+
     @unittest.skipUnless(shutil.which('node'), 'Node is required for browser-script checks')
     def test_edit_and_stop_preserve_confirmation_and_require_explicit_send(self):
         root = Path(__file__).resolve().parents[1]
@@ -32,6 +61,29 @@ vm.runInContext(`
 (async()=>{
   connected=true;
   let calls=[];
+  state={tts_playback:true, microphone_available:true, microphone:true};
+  $('message').value='чернетка';
+  controls();
+  assert.equal($('send').dataset.mode,'stop');
+  assert.equal($('send').disabled,false);
+  assert.equal($('microphone').disabled,false);
+  action=async(name)=>{calls.push(name); return true;};
+  await submitComposer();
+  assert.deepEqual(calls,['stop']);
+  assert.equal($('message').value,'чернетка');
+  state={tts_playback:false,tts_busy:false};
+  $('message').value=''; controls();
+  assert.equal($('send').dataset.mode,'send');
+  assert.equal($('send').disabled,true);
+  state={tts_busy:true}; controls();
+  assert.equal($('send').dataset.mode,'stop');
+  connected=false; controls();
+  assert.equal($('send').disabled,true);
+  connected=true; state={}; calls=[];
+  renderGlow(true, {sequence:1,strength:4,source:'pcm',samples:Array(32).fill(0),age_ms:0});
+  assert.equal(document.body.dataset.glow,'4');
+  renderGlow(false);
+  assert.equal(document.body.dataset.glow,'0');
   action=async(name,fields)=>{calls.push({name,fields}); return true;};
   editTranscript('почута репліка');
   assert.equal($('message').style.height,'38px');

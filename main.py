@@ -27,6 +27,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text-only", action="store_true")
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--web-ui", action="store_true", help="Локальний вебінтерфейс")
+    parser.add_argument('--ui', choices=('native', 'web', 'headless'), default=None,
+                        help='Інтерфейс: Qt Widgets, браузер або консоль')
     parser.add_argument("--web-port", type=int, default=0, help="Порт UI; 0 — вільний порт")
     parser.add_argument("--no-browser", action="store_true", help="Не відкривати UI автоматично")
     parser.add_argument(
@@ -34,16 +36,20 @@ def parse_args() -> argparse.Namespace:
         choices=("balanced", "fast", "raspberry_pi"),
         help="Профіль продуктивності лише для цього запуску",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.web_ui and args.ui in {'native', 'headless'}:
+        parser.error('--web-ui не поєднується з --ui native/headless')
+    args.web_ui = args.web_ui or args.ui == 'web'
+    return args
 
 
-def unlock_vault(settings) -> SecretStore:
+def unlock_vault(settings, password_prompt=console_getpass) -> SecretStore:
     vault = SecretStore(settings.paths.data_dir / "secrets.json")
     if not vault.exists:
         return vault
 
     for attempt in range(3):
-        password = console_getpass("Майстер-пароль Raven: ")
+        password = password_prompt("Майстер-пароль Raven: ")
         if vault.unlock_with_password(password):
             print("[SECURITY] Сховище секретів розблоковано.")
             return vault
@@ -52,7 +58,7 @@ def unlock_vault(settings) -> SecretStore:
     return vault
 
 
-async def async_main(args=None) -> int:
+async def async_main(args=None, native_bridge=None) -> int:
     args = args or parse_args()
     if not 0 <= args.web_port <= 65535:
         console_print("Порт має бути від 0 до 65535.")
@@ -66,6 +72,9 @@ async def async_main(args=None) -> int:
 
     configure_logging(settings)
     if args.setup or not settings.paths.config_file.exists():
+        if native_bridge is not None:
+            native_bridge.failure.emit('Спочатку виконайте python main.py --setup у терміналі, потім запустіть --ui native.')
+            return 2
         from setup_wizard import run_first_start_wizard
 
         run_first_start_wizard(settings.paths.project_root)
@@ -83,7 +92,9 @@ async def async_main(args=None) -> int:
         return 2
 
     try:
-        vault = unlock_vault(settings)
+        vault = unlock_vault(settings, native_bridge.password) if native_bridge else unlock_vault(settings)
+        if native_bridge is not None and native_bridge.closing.is_set():
+            return 0
 
         from core.metrics import MetricsCollector
         from core.performance import PerformanceRecorder
@@ -95,6 +106,8 @@ async def async_main(args=None) -> int:
         with performance.span("startup.app_construct"):
             app = RavenApp(settings, vault, text_only=args.text_only, performance=performance)
         try:
+            if native_bridge is not None:
+                await native_bridge.attach(app)
             if args.web_ui:
                 from core.web_ui import LocalWebUI
                 from core.console import console_stream
@@ -140,7 +153,15 @@ def main() -> int:
         with session:
             console_print(f"Журнал сесії: {session.path}")
             try:
-                exit_code = asyncio.run(async_main(args))
+                if getattr(args, 'ui', None) == 'native':
+                    try:
+                        from native_ui.runtime import run_native
+                    except ImportError:
+                        console_print('Native UI потребує PySide6: python -m pip install -r requirements-native.txt')
+                        return 2
+                    exit_code = run_native(lambda bridge: async_main(args, bridge))
+                else:
+                    exit_code = asyncio.run(async_main(args))
             except KeyboardInterrupt:
                 logging.getLogger("session.lifecycle").info("Shutdown requested: Ctrl+C")
                 console_print("\nRaven завершено.")

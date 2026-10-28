@@ -143,6 +143,7 @@ class RavenApp:
         )
 
     async def _say_confirmation(self, text):
+        self._notify_native_ui()
         processor = getattr(self, 'processor', None)
         if processor is not None:
             processor.dialogue_state.proposals.clear()
@@ -198,7 +199,6 @@ class RavenApp:
         print(f"[PERF] Інтерфейс готовий за {ready_ms:.0f} мс після розблокування; backends готуються у фоні.")
 
         tasks = [
-            asyncio.create_task(self._text_input_loop(), name="text-input"),
             asyncio.create_task(self._command_loop(), name="commands"),
             asyncio.create_task(self._reminder_loop(), name="reminders"),
             asyncio.create_task(
@@ -206,9 +206,14 @@ class RavenApp:
                 name="backend-initialization",
             ),
         ]
+        if getattr(self.web_ui, 'console_input', True):
+            tasks.append(asyncio.create_task(self._text_input_loop(), name="text-input"))
+        for task in tasks:
+            task.add_done_callback(lambda _: self._notify_native_ui())
         if not self.text_only:
             tasks.append(asyncio.create_task(self._voice_loop(), name="voice"))
         self._tasks = tasks
+        self._notify_native_ui()
 
         try:
             await asyncio.gather(*tasks)
@@ -336,6 +341,7 @@ class RavenApp:
             speech_token = SPEECH_SCOPE.set((self.speaker, getattr(self.speaker, "generation", 0)))
             timing.mark("dispatch")
             self.command_idle.clear()
+            self._notify_native_ui()
             try:
                 if not text.strip():
                     continue
@@ -405,6 +411,7 @@ class RavenApp:
                 CURRENT_TURN.reset(token)
                 self.command_queue.task_done()
                 self.command_idle.set()
+                self._notify_native_ui()
 
     async def _voice_loop(self) -> None:
         while self.running:
@@ -504,6 +511,7 @@ class RavenApp:
         try:
             while not task.done():
                 await asyncio.wait({task}, timeout=0.05)
+                self._notify_native_ui()
                 # Text input or a reminder may start TTS after recording began.
                 # Never enqueue the assistant's own audio as a user message.
                 if (not self.microphone_enabled or epoch != self._microphone_epoch
@@ -528,6 +536,7 @@ class RavenApp:
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             self._voice_inflight = False
+            self._notify_native_ui()
 
     async def _text_input_loop(self) -> None:
         loop = asyncio.get_running_loop()
@@ -690,6 +699,13 @@ class RavenApp:
                 registry.register('file_search', lambda: file_search_progress(files), files.cancel_search)
             self._progress_registry = registry
         return self._progress_registry
+
+    def _notify_native_ui(self):
+        """Optional push hook; no Qt dependency, no web/headless behavior change."""
+        ui = getattr(self, 'web_ui', None)
+        notify = getattr(ui, 'notify', None)
+        if notify is not None:
+            notify()
 
     def web_state(self):
         """Only explicit UI fields: never export settings, history files or secrets."""

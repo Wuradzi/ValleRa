@@ -15,20 +15,21 @@
       <div class="portrait" aria-hidden="true">
         <svg class="face" viewBox="0 0 400 480">
           <defs>
-            <path id="face-outline" d="M200 37C121 37 66 99 66 185L72 271C78 330 122 385 182 425Q200 438 218 425C278 385 322 330 328 271L334 185C334 99 279 37 200 37Z"/>
-            <linearGradient id="shell" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#292b30"/><stop offset=".5" stop-color="#191b20"/><stop offset="1" stop-color="#0d1015"/></linearGradient>
-            <linearGradient id="rim" x2="1" y2="1"><stop stop-color="#656a71" stop-opacity=".55"/><stop offset=".5" stop-color="#3d4149" stop-opacity=".2"/><stop offset="1" stop-color="#05080d"/></linearGradient>
-            <radialGradient id="sheen" cx=".25" cy=".12" r=".8"><stop stop-color="#808189" stop-opacity=".06"/><stop offset="1" stop-color="#808189" stop-opacity="0"/></radialGradient>
+            <linearGradient id="plumage" x1="0" y1="0" x2="1" y2=".8"><stop stop-color="#66647e"/><stop offset=".25" stop-color="#292939"/><stop offset=".6" stop-color="#10111d"/><stop offset="1" stop-color="#070912"/></linearGradient>
+            <linearGradient id="feather-edge" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#b3a7ed"/><stop offset=".4" stop-color="#64508d"/><stop offset="1" stop-color="#201b32" stop-opacity="0"/></linearGradient>
+            <linearGradient id="beak" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#171825"/><stop offset=".55" stop-color="#5e427d"/><stop offset=".8" stop-color="#a675d7"/><stop offset="1" stop-color="#2b1e43"/></linearGradient>
+            <radialGradient id="raven-halo"><stop stop-color="#9b52ee" stop-opacity=".18"/><stop offset="1" stop-color="#9b52ee" stop-opacity="0"/></radialGradient>
           </defs>
-          <use class="shell" href="#face-outline" fill="url(#shell)" stroke="url(#rim)" stroke-width="2"/>
-          <use href="#face-outline" fill="url(#sheen)"/>
+          <circle cx="200" cy="204" r="180" fill="url(#raven-halo)"/>
+          <circle class="raven-ring" cx="200" cy="204" r="174" fill="none" stroke="#7450a5" stroke-width="1.4"/>
+          <path d="M160 91C222 91 279 122 291 177L277 193C249 169 217 164 190 183C144 218 169 263 206 301C233 330 248 369 245 414C230 382 209 361 184 342C142 310 106 300 94 260C78 205 100 137 170 113Z" fill="url(#plumage)" stroke="url(#feather-edge)" stroke-width="2"/>
+          <path d="M160 91C222 91 272 119 291 177C258 154 230 135 192 140C139 146 110 184 94 235C93 175 115 130 170 113Z" fill="url(#plumage)"/>
+          <path d="M160 91C217 91 261 112 278 145" fill="none" stroke="#b7a2e5" stroke-opacity=".65" stroke-width="2"/>
+          <path d="M277 178C303 197 335 226 347 268C316 244 285 230 259 225C236 220 218 225 224 246C231 270 259 290 279 326C249 301 207 280 190 253C172 223 182 191 211 180C235 171 256 173 277 178Z" fill="url(#beak)" stroke="url(#feather-edge)" stroke-width="1.4"/>
+          <path d="M275 199L332 250L267 217C251 212 237 214 225 222" fill="#090b14"/>
+          <path d="M187 150C216 144 251 157 271 182L249 191C224 179 210 164 187 150Z" fill="#090a13"/>
           <g class="features">
-            <g class="eyes"><g class="eye left-eye"><rect x="108" y="237" width="65" height="5" rx="2.5"/></g><g class="eye right-eye"><rect x="227" y="237" width="65" height="5" rx="2.5"/></g></g>
-            <g class="mouth-position" transform="translate(0 354)">
-              <path class="mouth-rest" d="M180 0H220"/>
-              <path id="mouth-wave" class="mouth-wave" d="M172 0H228"/>
-              <path id="mouth-echo" class="mouth-echo" d="M172 0H228"/>
-            </g>
+            <path class="raven-eye" d="M214 163Q239 160 247 183Q225 190 214 163Z"/>
           </g>
         </svg>
       </div>
@@ -36,11 +37,10 @@
       <p id="status-detail" class="status-detail">Підключення до локального асистента.</p>
       <div class="voice-controls">
         <button id="microphone" class="round-button" disabled aria-pressed="false" title="Увімкнути мікрофон"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/><path class="mic-slash" d="M3 3l18 18"/></svg><span class="sr-only">Увімкнути мікрофон</span></button>
-        <button id="stop" class="round-button" disabled title="Зупинити відповідь та озвучення"><svg viewBox="0 0 24 24" aria-hidden="true"><rect class="solid" x="6" y="6" width="12" height="12" rx="2"/></svg><span class="sr-only">Зупинити відповідь та озвучення</span></button>
         <button id="history-toggle" class="round-button" type="button" aria-expanded="false" aria-controls="history-panel" title="Історія розмови"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1 7M4 5v5h5M12 7v5l3 2"/></svg><span class="sr-only">Розгорнути історію</span></button>
       </div>
       <p id="mic-detail" class="mic-detail">Стан мікрофона ще невідомий</p>
-      <p id="light-preview-note" class="mic-detail" role="status" hidden>Зразок хвилі · демонстраційні дані без звуку · 3 секунди</p>
+      <p id="light-preview-note" class="mic-detail" role="status" hidden>Зразок підсвічування · демонстраційні дані без звуку · 3 секунди</p>
     </section>
     <section class="conversation" aria-label="Розмова">
       <section id="agent-task" class="agent-task" hidden aria-label="Завдання агента">
@@ -56,9 +56,9 @@
       <section id="confirmation" class="confirmation" hidden aria-label="Підтвердження операції"><strong>Потрібне твоє рішення</strong><p id="confirmation-text"></p><div><button id="reject">Скасувати</button><button id="accept">Підтверджую</button></div></section>
       <button id="jump-latest" type="button" hidden>До останніх повідомлень ↓</button>
       <p id="draft-note" class="mic-detail" hidden>Редагування голосової репліки · буде надіслано як нове повідомлення</p>
-      <form id="composer" class="composer"><label for="message" class="sr-only">Твоє повідомлення</label><textarea id="message" rows="1" maxlength="4000" placeholder="Напиши або продиктуй свою думку…" disabled></textarea><button id="send" type="submit" title="Надіслати повідомлення" aria-label="Надіслати повідомлення" disabled>↑</button></form>
+      <form id="composer" class="composer"><span class="composer-spark" aria-hidden="true">✦<small>✦</small></span><label for="message" class="sr-only">Твоє повідомлення</label><textarea id="message" rows="1" maxlength="4000" placeholder="Напиши або продиктуй свою думку…" disabled></textarea><button id="send" type="submit" title="Надіслати повідомлення" aria-label="Надіслати повідомлення" disabled><svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 18-7-7 18-3-8-8-3Zm8 3L21 3"/></svg><svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button></form>
     </section>
-    <button class="about-button" id="about" aria-label="Стан сесії та налаштування" title="Стан сесії та налаштування">···</button>
+    <button class="about-button" id="about" aria-label="Стан сесії та налаштування" title="Стан сесії та налаштування"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 3-1 3-3 1-3 3 2 2-2 2 3 3 3 1 1 3h4l1-3 3-1 3-3-2-2 2-2-3-3-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </main>
   <dialog id="about-dialog">
     <div class="dialog-heading"><h2>Поточна сесія</h2><button id="close-about" aria-label="Закрити">×</button></div>
@@ -75,13 +75,13 @@
     </fieldset>
     <p>Можна просити звичайними словами — Рейвен уточнить і запропонує підтвердити дію. «Команда: …» — резервний явний формат. Enter — надіслати, Shift + Enter — новий рядок.</p>
     <p>Мікрофон і голос обробляє Raven, а не браузер. Текст розмови передається налаштованому LLM-провайдеру. Під час озвучення слухання призупинене.</p>
-    <p>Центральна кнопка зупиняє відповідь, не призупиняє її для продовження й не скасовує локальні дії. «Пауза розмови» не вимикає мікрофон — для цього є окрема кнопка.</p>
+    <p>Кнопка надсилання під час озвучення стає кнопкою «стоп» і зупиняє відповідь, не призупиняє її для продовження й не скасовує локальні дії. «Пауза розмови» не вимикає мікрофон — для цього є окрема кнопка.</p>
     <p>Закриття вкладки не завершує застосунок і не вимикає мікрофон. Історія цього вікна обмежена сесією; звичайні журнали зберігаються як раніше. Не надсилай секрети в чат.</p>
     <label class="motion-setting"><input id="motion" type="checkbox" checked> Пульсація світла під час мовлення</label>
     <label class="motion-setting"><input id="allow-pulse-motion" type="checkbox" checked> Дозволити світлові ефекти попри системне зменшення руху</label>
     <p id="light-status">Очікування стану підсвічування.</p>
     <button id="preview-light" type="button">Перевірити світло · 3 с</button>
-    <small>Форма хвилі будується з коротких PCM-фрагментів голосу, яскравість — із рівня звуку. Працює з прямим Windows TTS на типовому виході. Мікрофон та інші програми не записуються. Без свіжих аудіоданих рот залишається лінією. Це згладжене зображення сигналу, не точний осцилограф.</small>
+    <small>Фіолетове підсвічування емблеми, ока й обідка змінюється відповідно до рівня звуку голосу. Працює з прямим Windows TTS на типовому виході. Мікрофон та інші програми не записуються. Без свіжих аудіоданих підсвічування статичне. Це індикатор гучності, а не довільна циклічна анімація.</small>
   </dialog>
 </body>
 </html>

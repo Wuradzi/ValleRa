@@ -16,13 +16,12 @@ function resizeComposer() {
   const input = $("message");
   input.style.height = "auto";
   input.style.height = Math.min(144, Math.max(38, input.scrollHeight)) + "px";
-  $("send").disabled = !connected || sending || !input.value.trim();
+  updateSendControl();
 }
 let draftConfirmationId;
 let taskId = null, lastTaskJSON = "";
 let playbackExpiry = null;
 let glowExpiry = null, glowSequence = -1;
-let waveFrame = null, waveValues = Array(32).fill(0);
 let lightPreview = false, previewExpiry = null, stateReceivedAt = 0;
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 // Explicit app-only light preference; never changes the operating system setting.
@@ -68,54 +67,17 @@ function describeLight() {
   if (!$("motion").checked) detail = "Пульсацію вимкнено перемикачем вище.";
   else if (pulseMotionBlocked()) detail = "Система просить зменшити рух: пульсацію вимкнено. Окремий дозвіл вище вмикає її лише для Raven.";
   else if (document.hidden) detail = "Вкладку приховано — світлові ефекти призупинені.";
-  else if (lightPreview) detail = "Зразок форми хвилі: демонстраційні дані, без голосу й API.";
+  else if (lightPreview) detail = "Зразок підсвічування: демонстраційні дані, без голосу й API.";
   else if (!connected) detail = "Немає зв’язку з Raven. Перевірка світла працює окремо.";
   else if (typeof state?.tts_playback !== "boolean") detail = "Сервер не передає стан голосу. Перезапусти Raven й відкрий нове посилання сесії.";
-  else if (document.body.dataset.playback !== "true") detail = "Очікування озвучення. У спокої обличчя статичне.";
-  else if (document.body.dataset.glowMode !== "audio") detail = "Немає свіжих аудіоданих для хвилі. Рот залишається лінією; для цього виходу аналіз звуку може бути недоступний.";
-  else detail = "Форма хвилі — з PCM голосу, яскравість — з рівня звуку. Отримано кадрів: " + (state?.tts_glow?.sequence ?? 0);
+  else if (document.body.dataset.playback !== "true") detail = "Очікування озвучення. У спокої образ крука статичний.";
+  else if (document.body.dataset.glowMode !== "audio") detail = "Немає свіжих аудіоданих для підсвічування. Підсвічування статичне; для цього виходу аналіз звуку може бути недоступний.";
+  else detail = "Пульсація емблеми — з рівня звуку PCM голосу. Отримано кадрів: " + (state?.tts_glow?.sequence ?? 0);
   if ($("motion").checked && reducedMotion.matches && !pulseMotionBlocked()) {
     detail += " Світлові ефекти дозволено для Raven; налаштування системи не змінені.";
   }
   $("light-status").textContent = detail;
   $("preview-light").disabled = !$("motion").checked || pulseMotionBlocked();
-}
-function drawWave(values) {
-  // The 56-unit wave is only 1.4 times wider than the 40-unit resting mouth.
-  const points = values.map((value, i) => [172 + 56 * i / 31,
-    -value * .38 * Math.sin(Math.PI * i / 31)]);
-  function pathFor(scale) {
-    let path = "M172 0";
-    for (let i = 1; i < points.length - 1; i++) {
-      const [x, y] = points[i], [nx, ny] = points[i + 1];
-      path += ` Q${x.toFixed(2)} ${(y * scale).toFixed(2)} ${((x + nx) / 2).toFixed(2)} ${((y + ny) * scale / 2).toFixed(2)}`;
-    }
-    return path + " L228 0";
-  }
-  $("mouth-wave").setAttribute("d", pathFor(1));
-  $("mouth-echo").setAttribute("d", pathFor(.55));
-}
-function resetWave() {
-  cancelAnimationFrame(waveFrame);
-  waveFrame = null;
-  waveValues = Array(32).fill(0);
-  drawWave(waveValues);
-}
-function updateWave(samples) {
-  cancelAnimationFrame(waveFrame);
-  if (!$("motion").checked || pulseMotionBlocked() || document.hidden) { resetWave(); return; }
-  const from = waveValues.slice(), started = performance.now();
-  let lastPaint = -Infinity;
-  function frame(now) {
-    const progress = Math.min(1, (now - started) / 90);
-    if (now - lastPaint >= 32 || progress === 1) {
-      waveValues = samples.map((value, i) => from[i] + (value - from[i]) * progress);
-      drawWave(waveValues);
-      lastPaint = now;
-    }
-    waveFrame = progress < 1 ? requestAnimationFrame(frame) : null;
-  }
-  waveFrame = requestAnimationFrame(frame);
 }
 function renderGlow(playing, pulse) {
   if (lightPreview) return;
@@ -123,7 +85,7 @@ function renderGlow(playing, pulse) {
     clearTimeout(glowExpiry);
     document.body.dataset.glow = "0";
     document.body.dataset.glowMode = "idle";
-    resetWave();
+
     describeLight();
     return;
   }
@@ -133,33 +95,44 @@ function renderGlow(playing, pulse) {
     && pulse.samples.every(value => Number.isInteger(value) && Math.abs(value) <= 100)
     && Number.isFinite(pulse.age_ms) && pulse.age_ms >= 0 && pulse.age_ms < 300;
   document.body.dataset.glowMode = fresh ? "audio" : "unavailable";
-  if (!fresh) { document.body.dataset.glow = "0"; resetWave(); }
+  if (!fresh) { document.body.dataset.glow = "0"; }
   describeLight();
   if (!fresh || pulse.sequence === glowSequence) return;
   glowSequence = pulse.sequence;
   clearTimeout(glowExpiry);
   document.body.dataset.glow = String(pulse.strength);
-  updateWave(pulse.samples);
+
   glowExpiry = setTimeout(() => {
     document.body.dataset.glow = "0";
     document.body.dataset.glowMode = "unavailable";
-    resetWave();
+
     describeLight();
   }, Math.max(0, 300 - pulse.age_ms));
 }
 let sttInitialized = false;
 let sttSaving = false;
+function stopMode() {
+  return connected && (!!state?.tts_playback || !!state?.tts_busy || stopping);
+}
+function updateSendControl() {
+  const stop = stopMode();
+  const button = $("send");
+  button.dataset.mode = stop ? "stop" : "send";
+  button.disabled = !connected || (stop ? stopping : sending || !$("message").value.trim());
+  button.title = stop ? (stopping ? "Зупиняю відповідь…" : "Зупинити відповідь та озвучення") : "Надіслати повідомлення";
+  button.setAttribute("aria-label", button.title);
+  button.setAttribute("aria-busy", String(stopping));
+}
+function submitComposer() {
+  return stopMode() ? stopResponse() : send($("message").value);
+}
 function controls() {
   $("stt-save").disabled = !connected || sttSaving ||
     ($("stt-backend").value === "groq" && !$("stt-cloud-consent").checked);
   $("stt-backend").disabled = !connected || sttSaving;
-  for (const id of ["message", "stop", "new-chat"]) $(id).disabled = !connected;
-  $("send").disabled = !connected || sending;
+  $("new-chat").disabled = !connected;
   $("message").disabled = !connected || sending;
-  $("send").disabled ||= !$("message").value.trim();
-  $("stop").disabled = !connected || stopping;
-  $("stop").setAttribute("aria-busy", String(stopping));
-  $("stop").title = stopping ? "Зупиняю відповідь…" : "Зупинити відповідь та озвучення";
+  updateSendControl();
   for (const button of document.querySelectorAll(".edit-transcript")) {
     button.disabled = !connected || sending || !!confirmationId;
   }
@@ -341,7 +314,7 @@ function editTranscript(text) {
   $("draft-note").hidden = false;
   resizeComposer();
   $("message").focus();
-  banner("Виправ текст і натисни ↑. Це нове повідомлення, не скасування попередньої дії. За потреби спершу зупини відповідь.");
+  banner("Виправ текст і натисни кнопку надсилання. Це нове повідомлення, не скасування попередньої дії. За потреби спершу зупини відповідь.");
 }
 async function stopResponse() {
   if (!connected || stopping) return;
@@ -349,7 +322,7 @@ async function stopResponse() {
   try { await action("stop"); }
   finally { stopping = false; controls(); }
 }
-$("composer").addEventListener("submit", (event) => { event.preventDefault(); send($("message").value); });
+$("composer").addEventListener("submit", (event) => { event.preventDefault(); submitComposer(); });
 $("message").addEventListener("input", () => {
   if (draftConfirmationId === undefined) draftConfirmationId = confirmationId;
   if (!$("message").value) draftConfirmationId = undefined;
@@ -362,7 +335,7 @@ messages.addEventListener("scroll", () => {
 });
 $("jump-latest").addEventListener("click", jumpToLatest);
 $("message").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send($("message").value); }
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); submitComposer(); }
 });
 $("microphone").addEventListener("click", () => action("microphone", {enabled: !state.microphone}));
 $("stt-backend").addEventListener("change", controls);
@@ -378,7 +351,7 @@ $("stt-save").addEventListener("click", async () => {
   } catch (error) { banner(error.message); }
   finally { sttSaving = false; controls(); }
 });
-$("stop").addEventListener("click", stopResponse);
+
 $("pause").addEventListener("click", () => action(state.paused ? "resume" : "pause"));
 $("new-chat").addEventListener("click", () => send("Команда: нова розмова"));
 $("cancel-task").addEventListener("click", () => {
@@ -406,13 +379,13 @@ for (const id of ["motion", "allow-pulse-motion"]) {
     document.body.classList.toggle("allow-pulse-motion", $("allow-pulse-motion").checked);
     try { localStorage.setItem("raven-light-" + id, String($(id).checked)); } catch { /* Page-local fallback. */ }
     if ((!$("motion").checked || pulseMotionBlocked()) && lightPreview) endLightPreview();
-    if (!$("motion").checked || pulseMotionBlocked()) resetWave();
+
     describeLight();
   });
 }
 reducedMotion.addEventListener("change", () => {
   if (pulseMotionBlocked() && lightPreview) endLightPreview();
-  if (pulseMotionBlocked()) resetWave();
+
   describeLight();
 });
 $("preview-light").addEventListener("click", () => {
@@ -423,9 +396,7 @@ $("preview-light").addEventListener("click", () => {
   document.body.classList.add("light-preview");
   document.body.dataset.glowMode = "preview";
   document.body.dataset.glow = "5";
-  resetWave();
-  drawWave([0, 2, -4, 7, 14, -11, -20, 6, 24, 48, -12, -55, -31, 18, 65, 90,
-    20, -46, -72, -22, 32, 54, 17, -35, -22, 8, 18, 9, -7, -3, 2, 0]);
+
   $("light-preview-note").hidden = false;
   $("about-dialog").close();
   describeLight();

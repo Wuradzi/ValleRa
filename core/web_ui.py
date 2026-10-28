@@ -17,6 +17,8 @@ ASSETS = {"/": ("index.html", "text/html"), "/app.css": ("app.css", "text/css"),
 
 
 class LocalWebUI:
+    source_label = 'WEB'
+
     def __init__(self, app, port=0):
         self.app = app
         self.port = port
@@ -61,7 +63,7 @@ class LocalWebUI:
 
     async def _submit(self, text, confirmation_id=None):
         try:
-            logging.getLogger("session.dialogue").info("[WEB] %s", redact_user_text(text))
+            logging.getLogger("session.dialogue").info("[%s] %s", self.source_label, redact_user_text(text))
             await self.app._submit_text(text, confirmation_id)
         except Exception:
             logger.exception("Web UI submission failed")

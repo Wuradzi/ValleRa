@@ -1,20 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 480" fill="none">
-  <defs>
-    <linearGradient id="shell" x1="100" y1="35" x2="290" y2="430" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#273237"/><stop offset=".5" stop-color="#111b20"/><stop offset="1" stop-color="#0b1115"/>
-    </linearGradient>
-    <linearGradient id="rim" x1="110" y1="40" x2="300" y2="425" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#d9b8ef"/><stop offset=".32" stop-color="#675174"/><stop offset=".6" stop-color="#b184cc"/><stop offset="1" stop-color="#393044"/>
-    </linearGradient>
-    <radialGradient id="halo"><stop stop-color="#a647e8" stop-opacity=".1"/><stop offset="1" stop-color="#a647e8" stop-opacity="0"/></radialGradient>
-    <linearGradient id="eye"><stop stop-color="#c88ce8"/><stop offset=".5" stop-color="#efd2ff"/><stop offset="1" stop-color="#c88ce8"/></linearGradient>
-  </defs>
-  <ellipse cx="200" cy="232" rx="195" ry="226" fill="url(#halo)"/>
-  <path d="M200 37C121 37 66 99 66 185L72 271C78 330 122 385 182 425Q200 438 218 425C278 385 322 330 328 271L334 185C334 99 279 37 200 37Z" fill="url(#shell)" stroke="url(#rim)" stroke-width="1.4"/>
-  <path d="M200 40C132 40 80 90 70 153" stroke="#e4d2f4" stroke-opacity=".18" stroke-width="2"/>
-  <rect x="108" y="239" width="65" height="4" rx="2" fill="#c754f5" opacity=".1" stroke="#c754f5" stroke-width="9"/>
-  <rect x="227" y="239" width="65" height="4" rx="2" fill="#c754f5" opacity=".1" stroke="#c754f5" stroke-width="9"/>
-  <rect x="108" y="239" width="65" height="3" rx="1.5" fill="url(#eye)"/>
-  <rect x="227" y="239" width="65" height="3" rx="1.5" fill="url(#eye)"/>
-  <path d="M180 355H220" stroke="#dba3f5" stroke-width="2.5" stroke-linecap="round" opacity=".8"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 480">
+          <defs>
+            <linearGradient id="plumage" x1="0" y1="0" x2="1" y2=".8"><stop stop-color="#66647e"/><stop offset=".25" stop-color="#292939"/><stop offset=".6" stop-color="#10111d"/><stop offset="1" stop-color="#070912"/></linearGradient>
+            <linearGradient id="feather-edge" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#b3a7ed"/><stop offset=".4" stop-color="#64508d"/><stop offset="1" stop-color="#201b32" stop-opacity="0"/></linearGradient>
+            <linearGradient id="beak" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#171825"/><stop offset=".55" stop-color="#5e427d"/><stop offset=".8" stop-color="#a675d7"/><stop offset="1" stop-color="#2b1e43"/></linearGradient>
+            <radialGradient id="raven-halo"><stop stop-color="#9b52ee" stop-opacity=".18"/><stop offset="1" stop-color="#9b52ee" stop-opacity="0"/></radialGradient>
+          </defs>
+          <circle cx="200" cy="204" r="180" fill="url(#raven-halo)"/>
+          <circle id="raven-ring" class="raven-ring" cx="200" cy="204" r="174" fill="none" stroke="#7450a5" stroke-width="1.4"/>
+          <path d="M160 91C222 91 279 122 291 177L277 193C249 169 217 164 190 183C144 218 169 263 206 301C233 330 248 369 245 414C230 382 209 361 184 342C142 310 106 300 94 260C78 205 100 137 170 113Z" fill="url(#plumage)" stroke="url(#feather-edge)" stroke-width="2"/>
+          <path d="M160 91C222 91 272 119 291 177C258 154 230 135 192 140C139 146 110 184 94 235C93 175 115 130 170 113Z" fill="url(#plumage)"/>
+          <path d="M160 91C217 91 261 112 278 145" fill="none" stroke="#b7a2e5" stroke-opacity=".65" stroke-width="2"/>
+          <path d="M277 178C303 197 335 226 347 268C316 244 285 230 259 225C236 220 218 225 224 246C231 270 259 290 279 326C249 301 207 280 190 253C172 223 182 191 211 180C235 171 256 173 277 178Z" fill="url(#beak)" stroke="url(#feather-edge)" stroke-width="1.4"/>
+          <path d="M275 199L332 250L267 217C251 212 237 214 225 222" fill="#090b14"/>
+          <path d="M187 150C216 144 251 157 271 182L249 191C224 179 210 164 187 150Z" fill="#090a13"/>
+          <g fill="#dfafff">
+            <path class="raven-eye" d="M214 163Q239 160 247 183Q225 190 214 163Z"/>
+          </g>
+        </svg>

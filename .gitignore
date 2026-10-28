@@ -65,5 +65,6 @@ htmlcov/
 !/docs/LINUX_RUNTIME.md
 !/docs/WINDOWS_SETUP.md
 !/docs/USER_GUIDE.md
+!/docs/NATIVE_UI.md
 !/docs/CONFIGURATION.md
 !/docs/TESTING.md

@@ -429,3 +429,11 @@ STT engine/confidence, timing reference та незалежні прапорці
 - Whisper-worker ігнорує SIGINT, завершенням при Ctrl+C керує головний процес;
 - нагадування перевіряються окремою задачею;
 - код LLM у другому етапі запускається окремим процесом.
+
+## Опційна нативна презентація (28.10.2026)
+
+`main.py --ui native` запускає Qt Widgets у main thread та asyncio Core у
+QThread. `native_ui/transport.py` повторно використовує наявну валідацію UI
+команд без HTTP-сервера. Сигнали передають копії подій/стану; бізнес-логіка,
+ActionPolicy і confirmation лишаються у Core. PySide6 не імпортується
+у Web/headless. Деталі й обмеження: [NATIVE_UI.md](NATIVE_UI.md).

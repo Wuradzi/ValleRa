@@ -1,0 +1,3 @@
+# Optional native Widgets UI. No Addons / QtWebEngine dependency.
+# Python 3.9–3.13; ARM64 wheel needs glibc >= 2.39 (see docs/NATIVE_UI.md).
+PySide6-Essentials==6.8.3
