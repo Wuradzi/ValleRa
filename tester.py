@@ -34,7 +34,7 @@ GROUPS = {
     "llm": ("Моделі, контекст, помилки та резервування", (
         "llm_*", "gemini_provider", "empty_response_retry", "conversation_context", "streaming")),
     "commands": ("Команди, маршрутизація, підтвердження", (
-        "interaction", "router", "skill_loader", "command_intent", "task_context")),
+        "interaction", "router", "skill_loader", "command_intent", "task_context", "phrase_corpus")),
     "files": ("Файли та вибір результату", ("task_context",)),
     "storage": ("Пам'ять, нагадування та сховище", (
         "atomic_json", "memory_store", "reminder_store", "secret_store")),
@@ -44,7 +44,7 @@ GROUPS = {
     "performance": ("Метрики та профілі швидкодії", (
         "performance", "turn_timing", "audio_blocks", "whisper_comparison")),
     "config": ("Налаштування", ("config",)),
-    "logging": ("Сесійні журнали", ("session_logging",)),
+    "logging": ("Сесійні журнали", ("session_logging", "log_retention")),
     "runtime": ("Життєвий цикл процесів", (
         "audio_lifecycle", "single_instance", "session_logging")),
     "audit": ("Модуль аудиту — тільки ізольовані тести", ("pentest",)),
@@ -528,10 +528,12 @@ def stop_worker(process) -> None:
 
 
 def run_selected(args) -> int:
+    from core.log_retention import prune_quietly, prune_test_runs
     from core.security import sanitized_environment
 
     probe = getattr(args, "probe", None)
     modules = args.module or []
+    prune_quietly(prune_test_runs, ROOT)
     started = time.perf_counter()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     directory = ROOT / "logs" / "tests" / f"{stamp}-{uuid.uuid4().hex[:8]}"

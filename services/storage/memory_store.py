@@ -54,7 +54,7 @@ class MemoryStore:
             item for item in state["items"]
             if query.lower() not in item["key"].lower()
         ]
-        self.file.save(state)
+        self.file.save(state, forget_history=True)
         return before - len(state["items"])
 
     def all(self) -> list[dict]:
@@ -63,7 +63,7 @@ class MemoryStore:
     def remove_ids(self, ids: set[str]) -> None:
         state = self.file.load()
         state['items'] = [item for item in state['items'] if item['id'] not in ids]
-        self.file.save(state)
+        self.file.save(state, forget_history=True)
 
     def clear(self) -> None:
-        self.file.save({"items": []})
+        self.file.save({"items": []}, forget_history=True)

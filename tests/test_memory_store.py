@@ -68,3 +68,22 @@ class MemoryStoreTests(unittest.TestCase):
             self.assertEqual(store.find("браузер")[0]["value"], "Firefox")
             self.assertEqual(store.forget("браузер"), 1)
             self.assertEqual(store.all(), [])
+
+    def test_forgotten_facts_do_not_survive_in_backups(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir)
+            for operation in ("forget", "remove_ids", "clear"):
+                store = MemoryStore(folder / f"{operation}.json")
+                item = store.remember("адреса", "вулиця Тестова 1")
+                store.remember("браузер", "Firefox")
+                if operation == "forget":
+                    store.forget("адреса")
+                elif operation == "remove_ids":
+                    store.remove_ids({item["id"]})
+                else:
+                    store.clear()
+                with self.subTest(operation=operation):
+                    leftovers = [p.read_text(encoding="utf-8") for p in folder.glob(f"{operation}.json*")]
+                    self.assertTrue(leftovers)
+                    self.assertFalse(any("Тестова" in text for text in leftovers))
+                    self.assertEqual(list(folder.glob(f"{operation}.json.bak*")), [])

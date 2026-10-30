@@ -386,28 +386,49 @@ class CommandProcessor:
         web_context = web_answers.dialogue_context() if web_answers is not None else None
         if STOP_SPEECH.fullmatch(raw_text):
             await self.speaker.stop()
-            result = SkillResult(True, "", {"command_type": "speech_stopped"})
-        elif control == "repeat":
+            return SkillResult(True, "", {"command_type": "speech_stopped"}), provider, False
+        result = self._conversation_control_reply(control)
+        if result is None:
+            result = self._conversation_context_reply(raw_text, normalized, state, web_answers, web_context)
+        if result is not None:
+            return result, provider, False
+        if (control is None and getattr(self.settings, "natural_actions_enabled", False)
+                and callable(getattr(self.llm_manager, "converse", None))):
+            result = await self._natural_turn(raw_text, normalized, context, web_context,
+                proposal_lease=proposal_lease, proposal_generation=proposal_generation,
+                session_id=session_id, proposal_quality=proposal_quality)
+            provider = "local" if result.data.get("natural_action") else self.llm_manager.active_name
+            return result, provider, False
+        return await self._chat_turn(raw_text, normalized, control, source, started)
+
+    def _conversation_control_reply(self, control):
+        """Local replies to dialogue controls (repeat/continue/rephrase) and pause."""
+        if control == "repeat":
             self.conversation_paused = False
             repeated = (("Повторю збережену частину довгої відповіді. " if self._reply_truncated else "") + self._last_reply)
-            result = SkillResult(True, repeated or "Ще немає розмовної відповіді, яку можна повторити.",
-                                 {"command_type": "conversation_repeat"})
-        elif control == "continue" and self.conversation_paused and not self._reply_interrupted:
+            return SkillResult(True, repeated or "Ще немає розмовної відповіді, яку можна повторити.",
+                               {"command_type": "conversation_repeat"})
+        if control == "continue" and self.conversation_paused and not self._reply_interrupted:
             self.conversation_paused = False
-            result = SkillResult(True, "Знову слухаю. Щоб повторити відповідь, скажіть «повтори останнє».",
-                                 {"command_type": "conversation_resume"})
-        elif control and (not self._last_question or (control != 'continue' and not self._last_reply)):
+            return SkillResult(True, "Знову слухаю. Щоб повторити відповідь, скажіть «повтори останнє».",
+                               {"command_type": "conversation_resume"})
+        if control and (not self._last_question or (control != 'continue' and not self._last_reply)):
             self.conversation_paused = False
-            result = SkillResult(True, "Слухаю. Про що поговоримо?" if control == "continue"
-                                 else "Спочатку поставте питання — ще немає відповіді для переформулювання.",
-                                 {"command_type": "conversation_resume"})
-        elif self.conversation_paused and control is None:
-            result = SkillResult(True, "", {"command_type": "conversation_paused"})
-        elif WEB_CORRECTION.fullmatch(raw_text) and web_context and web_context.get("status") != "expired":
-            result = web_answers.request_correction()
-        elif LAST_OPEN_QUESTION.match(normalized):
+            return SkillResult(True, "Слухаю. Про що поговоримо?" if control == "continue"
+                               else "Спочатку поставте питання — ще немає відповіді для переформулювання.",
+                               {"command_type": "conversation_resume"})
+        if self.conversation_paused and control is None:
+            return SkillResult(True, "", {"command_type": "conversation_paused"})
+        return None
+
+    @staticmethod
+    def _conversation_context_reply(raw_text, normalized, state, web_answers, web_context):
+        """Local replies about the previous web answer or the last local open."""
+        if WEB_CORRECTION.fullmatch(raw_text) and web_context and web_context.get("status") != "expired":
+            return web_answers.request_correction()
+        if LAST_OPEN_QUESTION.match(normalized):
             last_open = state.get("last_open_action")
-            result = SkillResult(
+            return SkillResult(
                 True,
                 (
                     f"Останній результат локального відкриття: "
@@ -417,100 +438,108 @@ class CommandProcessor:
                 ),
                 {"command_type": "last_open_action"},
             )
-        elif (control is None and getattr(self.settings, "natural_actions_enabled", False)
-              and callable(getattr(self.llm_manager, "converse", None))):
-            result = await self._natural_turn(raw_text, normalized, context, web_context,
-                proposal_lease=proposal_lease, proposal_generation=proposal_generation,
-                session_id=session_id, proposal_quality=proposal_quality)
-            provider = "local" if result.data.get("natural_action") else self.llm_manager.active_name
+        return None
+
+    async def _chat_turn(self, raw_text, normalized, control, source, started):
+        """Tool-free LLM chat with streamed speech; returns (result, provider, finished)."""
+        self.conversation_paused = False
+        control_context = None
+        if control:
+            control_context = {"question": self._last_question, "answer": self._last_reply,
+                               "interrupted": self._reply_interrupted, "truncated": self._reply_truncated}
         else:
-            self.conversation_paused = False
-            control_context = None
-            if control:
-                control_context = {"question": self._last_question, "answer": self._last_reply,
-                                   "interrupted": self._reply_interrupted, "truncated": self._reply_truncated}
-            else:
-                self._last_question = raw_text[:2000]
-                self._cache_reply("")
-            self._reply_interrupted = True
-            provider = self.llm_manager.active_name
-            buffer = SpeechBuffer()
-            spoken_parts: list[str] = []
-            saw_tokens = False
+            self._last_question = raw_text[:2000]
+            self._cache_reply("")
+        self._reply_interrupted = True
+        provider = self.llm_manager.active_name
+        buffer = SpeechBuffer()
+        spoken_parts: list[str] = []
+        saw_tokens = False
 
-            async def emit(parts):
-                for part in parts:
-                    part = part.strip("*#` ")
-                    if LOCAL_ACTION_CLAIM.match(part.lower()):
-                        part = "Я не виконую локальні дії в розмові. Скажіть: Команда, а потім назвіть дію."
-                    if not spoken_parts:
-                        self.services.get("performance", DISABLED_PERFORMANCE).record(
-                            "response.first_phrase_to_tts_queue",
-                            (time.perf_counter() - started) * 1000,
-                        )
-                        self.metrics.record(
-                            "first_speech_queued",
-                            duration_ms=round((time.perf_counter() - started) * 1000, 2),
-                        )
-                    await self.speaker.say(part)
-                    spoken_parts.append(part)
-                    self._cache_reply(" ".join(spoken_parts))
+        async def emit(parts):
+            for part in parts:
+                part = part.strip("*#` ")
+                if LOCAL_ACTION_CLAIM.match(part.lower()):
+                    part = "Я не виконую локальні дії в розмові. Скажіть: Команда, а потім назвіть дію."
+                if not spoken_parts:
+                    self.services.get("performance", DISABLED_PERFORMANCE).record(
+                        "response.first_phrase_to_tts_queue",
+                        (time.perf_counter() - started) * 1000,
+                    )
+                    self.metrics.record(
+                        "first_speech_queued",
+                        duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                    )
+                await self.speaker.say(part)
+                spoken_parts.append(part)
+                self._cache_reply(" ".join(spoken_parts))
 
-            async def on_chunk(text):
-                nonlocal saw_tokens
-                saw_tokens = True
-                await emit(buffer.feed(text))
+        async def on_chunk(text):
+            nonlocal saw_tokens
+            saw_tokens = True
+            await emit(buffer.feed(text))
 
-            web_answers = self.services.get("web_answers")
-            web_options = ({"web_context": web_answers.dialogue_context()}
-                           if web_answers is not None else {})
-            if control_context is not None:
-                web_options = {"dialogue_control": control_context}
-            system_context = CHAT_MODE_PROMPT + ("\n" + VOICE_INPUT_PROMPT if source == "voice" else "")
-            system_context += "\n" + chat_catalog(self.services.get("enabled_skills", set()))
-            if control in CONTROL_PROMPTS:
-                system_context += "\n" + CONTROL_PROMPTS[control]
-            chat_task = asyncio.create_task(self.llm_manager.chat(
-                raw_text,
-                [] if control else self.services["memory"].relevant(normalized),
-                system_context,
-                on_chunk=on_chunk,
-                **web_options,
-                **self._document_options(raw_text),
-            ))
-            self._chat_task = chat_task
-            try:
-                answer = await chat_task
-            except asyncio.CancelledError:
-                if asyncio.current_task().cancelling():
-                    raise
-                return SkillResult(True, "", {"command_type": "chat_interrupted"}), provider, True
-            finally:
-                self._chat_task = None
-            if saw_tokens:
-                await emit(buffer.feed("", final=True))
-                answer = " ".join(spoken_parts)
-                self.llm_manager.rewrite_last_answer(answer)
-            elif LOCAL_ACTION_CLAIM.match(answer.lower().strip()):
-                answer = (
-                    "Я не виконую локальні дії в режимі розмови. "
-                    "Скажіть: «Команда», а потім назвіть дію."
-                )
-                rewrite = getattr(
-                    self.llm_manager,
-                    "rewrite_last_answer",
-                    None,
-                )
-                if rewrite:
-                    rewrite(answer)
-            result = SkillResult(
-                True,
-                answer,
-                {"command_type": "chat", "response_spoken": bool(spoken_parts)},
-            )
-            self._cache_reply(answer)
-            self._reply_interrupted = False
+        system_context, web_options = self._chat_options(control, control_context, source)
+        chat_task = asyncio.create_task(self.llm_manager.chat(
+            raw_text,
+            [] if control else self.services["memory"].relevant(normalized),
+            system_context,
+            on_chunk=on_chunk,
+            **web_options,
+            **self._document_options(raw_text),
+        ))
+        self._chat_task = chat_task
+        try:
+            answer = await chat_task
+        except asyncio.CancelledError:
+            if asyncio.current_task().cancelling():
+                raise
+            return SkillResult(True, "", {"command_type": "chat_interrupted"}), provider, True
+        finally:
+            self._chat_task = None
+        if saw_tokens:
+            await emit(buffer.feed("", final=True))
+            answer = " ".join(spoken_parts)
+            self.llm_manager.rewrite_last_answer(answer)
+        else:
+            answer = self._screen_unstreamed_chat_answer(answer)
+        result = SkillResult(
+            True,
+            answer,
+            {"command_type": "chat", "response_spoken": bool(spoken_parts)},
+        )
+        self._cache_reply(answer)
+        self._reply_interrupted = False
         return result, provider, False
+
+    def _screen_unstreamed_chat_answer(self, answer):
+        """A non-streamed chat answer must not claim a local action was performed."""
+        if LOCAL_ACTION_CLAIM.match(answer.lower().strip()):
+            answer = (
+                "Я не виконую локальні дії в режимі розмови. "
+                "Скажіть: «Команда», а потім назвіть дію."
+            )
+            rewrite = getattr(
+                self.llm_manager,
+                "rewrite_last_answer",
+                None,
+            )
+            if rewrite:
+                rewrite(answer)
+        return answer
+
+    def _chat_options(self, control, control_context, source):
+        """System prompt and web/dialogue-control options for one chat request."""
+        web_answers = self.services.get("web_answers")
+        web_options = ({"web_context": web_answers.dialogue_context()}
+                       if web_answers is not None else {})
+        if control_context is not None:
+            web_options = {"dialogue_control": control_context}
+        system_context = CHAT_MODE_PROMPT + ("\n" + VOICE_INPUT_PROMPT if source == "voice" else "")
+        system_context += "\n" + chat_catalog(self.services.get("enabled_skills", set()))
+        if control in CONTROL_PROMPTS:
+            system_context += "\n" + CONTROL_PROMPTS[control]
+        return system_context, web_options
 
     def _finish_turn(self, result, provider, success, raw_text, local_raw, source, started, state):
         """Shared post-processing: context resets, last local action, metrics."""
@@ -583,14 +612,114 @@ class CommandProcessor:
         pending = self._natural_pending
         self._natural_pending = None  # Consume once; later chat must not replay an old request.
         request = voice_request(text) if context.source == "voice" else text
+        pending, scoped = self._scope_pending(pending, text, request)
+        if self._needs_proposal_clarification(text, scoped, proposal_lease):
+            return SkillResult(True, 'Уточніть, будь ласка, що саме потрібно зробити.',
+                               {'command_type': 'intent_clarification', 'success': False})
+        result = await self._natural_window(text, request, pending, scoped, context)
+        if result is not None:
+            return result
+        model_text = self._natural_model_text(text, request, pending, scoped)
+        result = await self._natural_local_shortcut(request, scoped, context)
+        if result is not None:
+            return result
+        buffer = SpeechBuffer()
+        spoken = []
+        self._last_question = text[:2000]
+        self._cache_reply("")
+        self._reply_interrupted = True
+
+        async def emit(parts):
+            for part in parts:
+                part = self._screen_natural_part(part)
+                await self.speaker.say(part)
+                spoken.append(part)
+                self._cache_reply(" ".join(spoken))
+
+        async def on_chunk(chunk):
+            # Explicit CHAT supplies screened sentences; other formats wait for validation.
+            await emit(buffer.feed(chunk, final=True))
+
+        proposal_options = self._proposal_options(proposal_lease)
+        task = asyncio.create_task(self.llm_manager.converse(
+            model_text, self.services["memory"].relevant(normalized),
+            enabled_skills=self.services.get("enabled_skills", set()), web_context=web_context,
+            **self._document_options(model_text),
+            on_chunk=on_chunk, **proposal_options))
+        self._chat_task = task
+        try:
+            turn = await task
+        except asyncio.CancelledError:
+            if asyncio.current_task().cancelling():
+                raise
+            return SkillResult(True, "", {"command_type": "chat_interrupted"})
+        finally:
+            self._chat_task = None  # Local operations must not be cancelled by conversation interruption.
+        if turn.kind in {'proposal', 'followup'}:
+            return await self._natural_proposal(turn, text, context, scoped, proposal_lease,
+                                                proposal_generation, session_id, proposal_quality)
+        return await self._natural_decision(turn, text, request, model_text, pending, scoped, context,
+                                            emit, buffer, spoken)
+
+    async def _natural_decision(self, turn, text, request, model_text, pending, scoped, context,
+                                emit, buffer, spoken):
+        """ACTION goes through policy; CHAT/CLARIFY only speak and may keep a scoped question."""
+        turn = DialogueDecision.from_natural(turn, context.turn_id)
+        logger.info("Natural decision kind=%s tool=%s scoped=%s", turn.kind.value,
+                    turn.intent.tool if turn.intent is not None else None, scoped)
+        if turn.kind == "action":
+            return await self._natural_action(turn, request, text, pending, scoped, context)
+        if turn.kind == 'unavailable' and spoken:
+            # Preserve partial speech, surface failure, and never rewrite older history.
+            await emit([turn.response])
+            answer = " ".join(spoken)
+            self._cache_reply(answer)
+            self._reply_interrupted = True
+            return SkillResult(True, answer, {"command_type": "chat", "response_spoken": True})
+        await emit(buffer.feed("", final=True))
+        answer = self._natural_answer(turn, spoken)
+        self._remember_natural_question(turn, answer, request, model_text, pending, scoped)
+        return SkillResult(True, answer, {"command_type": "chat", "response_spoken": bool(spoken)})
+
+    @staticmethod
+    def _scope_pending(pending, text, request):
+        """(pending, scoped): a short live reply continues the pending tool request."""
         scoped = bool(pending and time.monotonic() < pending["expires"]
                       and pending.get("tool") and short_clarification(text)
                       and not direct_request(request, ""))
         if pending and not scoped and pending.get("tool"):
             pending = None
-        if not scoped and not self.dialogue_state.proposals.current(proposal_lease) and needs_proposal(text):
-            return SkillResult(True, 'Уточніть, будь ласка, що саме потрібно зробити.',
+        return pending, scoped
+
+    @staticmethod
+    def _screen_natural_part(part):
+        part = part.strip("*#` ")
+        if LOCAL_ACTION_CLAIM.match(part.lower()):
+            part = "Дію ще не виконано. Для запуску потрібен погоджений план."
+        return part
+
+    def _needs_proposal_clarification(self, text, scoped, proposal_lease):
+        return not scoped and not self.dialogue_state.proposals.current(proposal_lease) and needs_proposal(text)
+
+    def _proposal_options(self, proposal_lease):
+        if self.dialogue_state.proposals.current(proposal_lease):
+            return {'proposal_context': proposal_lease.proposal.model_context()}
+        return {}
+
+    async def _natural_proposal(self, turn, text, context, scoped, proposal_lease,
+                                proposal_generation, session_id, proposal_quality):
+        if asyncio.current_task().cancelling():
+            self.dialogue_state.proposals.clear()
+            raise asyncio.CancelledError
+        self._reply_interrupted = False
+        if not proposal_quality or scoped:
+            return SkillResult(True, 'Повторіть повне прохання або уточніть поточний запит; нічого не виконано.',
                                {'command_type': 'intent_clarification', 'success': False})
+        return await self._resolve_proposal(turn, text, context, proposal_lease,
+                                            proposal_generation, session_id)
+
+    async def _natural_window(self, text, request, pending, scoped, context):
+        """Window control from a direct request or a scoped name reply; None if not a window turn."""
         window = window_request(request) if direct_request(request, "window_control") else None
         if scoped and pending["tool"] == "window_control":
             name = application_name_reply(text)
@@ -599,25 +728,33 @@ class CommandProcessor:
                 return SkillResult(True, "Назвіть програму або заголовок вікна. Самого «так» недостатньо.",
                                    {"command_type": "intent_clarification", "success": False})
             window = (pending["window_action"], name)
-        if window is not None:
-            if "windows" not in self.services.get("enabled_skills", set()):
-                return SkillResult(True, "Керування вікнами недоступне в цій сесії.",
-                                   {"command_type": "window_unavailable", "success": False})
-            action, name = window
-            if not name:
-                self._natural_pending = {"expires": time.monotonic() + 120, "tool": "window_control",
-                                         "window_action": action, "request": request}
-                return SkillResult(True, "Назвіть програму або заголовок вікна.",
-                                   {"command_type": "intent_clarification", "success": False})
-            result = await execute_intent(CommandIntent("window_control", {"name": name, "action": action}), context)
-            result.data["natural_action"] = True
-            return result
-        model_text = request
-        if scoped:
-            model_text = (pending["request"] + "\nУточнення користувача: " + text
-                          + "\nПопереднє уточнювальне питання: " + pending.get("question", "")
-                          + "\nЦе продовження одного запиту. Запропонуй тільки " + pending["tool"]
-                          + "; не вигадуй відсутніх параметрів. Дозвіл на виконання запитає локальна система.")
+        if window is None:
+            return None
+        if "windows" not in self.services.get("enabled_skills", set()):
+            return SkillResult(True, "Керування вікнами недоступне в цій сесії.",
+                               {"command_type": "window_unavailable", "success": False})
+        action, name = window
+        if not name:
+            self._natural_pending = {"expires": time.monotonic() + 120, "tool": "window_control",
+                                     "window_action": action, "request": request}
+            return SkillResult(True, "Назвіть програму або заголовок вікна.",
+                               {"command_type": "intent_clarification", "success": False})
+        result = await execute_intent(CommandIntent("window_control", {"name": name, "action": action}), context)
+        result.data["natural_action"] = True
+        return result
+
+    @staticmethod
+    def _natural_model_text(text, request, pending, scoped):
+        """Model prompt; a scoped reply continues the pending request instead of starting anew."""
+        if not scoped:
+            return request
+        return (pending["request"] + "\nУточнення користувача: " + text
+                + "\nПопереднє уточнювальне питання: " + pending.get("question", "")
+                + "\nЦе продовження одного запиту. Запропонуй тільки " + pending["tool"]
+                + "; не вигадуй відсутніх параметрів. Дозвіл на виконання запитає локальна система.")
+
+    async def _natural_local_shortcut(self, request, scoped, context):
+        """Exact workplace/app requests that need no model; None when the model must decide."""
         # Exact saved-workplace requests need no model permission dialogue.
         local_request = re.sub(r"^(?:рейвен|рейвене|raven)[, ]+", "", request.strip(), flags=re.I)
         if (WORK_MODE.fullmatch(local_request) or local_request.lower().rstrip('.!?') in
@@ -634,74 +771,22 @@ class CommandProcessor:
             result.data["natural_action"] = True
             result.data["intent_route"] = "local_exact"
             return result
-        buffer = SpeechBuffer()
-        spoken = []
-        self._last_question = text[:2000]
-        self._cache_reply("")
-        self._reply_interrupted = True
+        return None
 
-        async def emit(parts):
-            for part in parts:
-                part = part.strip("*#` ")
-                if LOCAL_ACTION_CLAIM.match(part.lower()):
-                    part = "Дію ще не виконано. Для запуску потрібен погоджений план."
-                await self.speaker.say(part)
-                spoken.append(part)
-                self._cache_reply(" ".join(spoken))
+    async def _natural_action(self, turn, request, text, pending, scoped, context):
+        self._reply_interrupted = False
+        permission = natural_action_permission(turn, request, text, pending, scoped)
+        if permission.outcome is not PolicyOutcome.ALLOW:
+            return SkillResult(True, permission.response,
+                               {"command_type": "intent_clarification", "success": False})
+        intent = permission.intent
+        result = await asyncio.wait_for(execute_intent(intent, context), timeout=120)
+        result.data["natural_action"] = True
+        self._reply_interrupted = False
+        return result
 
-        async def on_chunk(chunk):
-            # Explicit CHAT supplies screened sentences; other formats wait for validation.
-            await emit(buffer.feed(chunk, final=True))
-
-        proposal_options = {}
-        if self.dialogue_state.proposals.current(proposal_lease):
-            proposal_options['proposal_context'] = proposal_lease.proposal.model_context()
-        task = asyncio.create_task(self.llm_manager.converse(
-            model_text, self.services["memory"].relevant(normalized),
-            enabled_skills=self.services.get("enabled_skills", set()), web_context=web_context,
-            **self._document_options(model_text),
-            on_chunk=on_chunk, **proposal_options))
-        self._chat_task = task
-        try:
-            turn = await task
-        except asyncio.CancelledError:
-            if asyncio.current_task().cancelling():
-                raise
-            return SkillResult(True, "", {"command_type": "chat_interrupted"})
-        finally:
-            self._chat_task = None  # Local operations must not be cancelled by conversation interruption.
-        if turn.kind in {'proposal', 'followup'}:
-            if asyncio.current_task().cancelling():
-                self.dialogue_state.proposals.clear()
-                raise asyncio.CancelledError
-            self._reply_interrupted = False
-            if not proposal_quality or scoped:
-                return SkillResult(True, 'Повторіть повне прохання або уточніть поточний запит; нічого не виконано.',
-                                   {'command_type': 'intent_clarification', 'success': False})
-            return await self._resolve_proposal(turn, text, context, proposal_lease,
-                                                proposal_generation, session_id)
-        turn = DialogueDecision.from_natural(turn, context.turn_id)
-        logger.info("Natural decision kind=%s tool=%s scoped=%s", turn.kind.value,
-                    turn.intent.tool if turn.intent is not None else None, scoped)
-        if turn.kind == "action":
-            self._reply_interrupted = False
-            permission = natural_action_permission(turn, request, text, pending, scoped)
-            if permission.outcome is not PolicyOutcome.ALLOW:
-                return SkillResult(True, permission.response,
-                                   {"command_type": "intent_clarification", "success": False})
-            intent = permission.intent
-            result = await asyncio.wait_for(execute_intent(intent, context), timeout=120)
-            result.data["natural_action"] = True
-            self._reply_interrupted = False
-            return result
-        if turn.kind == 'unavailable' and spoken:
-            # Preserve partial speech, surface failure, and never rewrite older history.
-            await emit([turn.response])
-            answer = " ".join(spoken)
-            self._cache_reply(answer)
-            self._reply_interrupted = True
-            return SkillResult(True, answer, {"command_type": "chat", "response_spoken": True})
-        await emit(buffer.feed("", final=True))
+    def _natural_answer(self, turn, spoken):
+        """Final CHAT/CLARIFY text: spoken parts win; local-action claims are rewritten."""
         answer = " ".join(spoken) if spoken else turn.response
         if LOCAL_ACTION_CLAIM.match(answer.lower().strip()):
             answer = "Дію ще не виконано. Для запуску потрібен погоджений план."
@@ -709,12 +794,15 @@ class CommandProcessor:
             self.llm_manager.rewrite_last_answer(answer)
         self._cache_reply(answer)
         self._reply_interrupted = False
+        return answer
+
+    def _remember_natural_question(self, turn, answer, request, model_text, pending, scoped):
+        """Keep a scoped clarification so a short follow-up can complete the same request."""
         scope = pending["tool"] if scoped else request_scope(request)
         if scope and (turn.kind == "clarify" or (turn.kind == "chat" and "?" in answer)):
             self._natural_pending = {"expires": time.monotonic() + 120, "tool": scope,
                                      "request": model_text[:1600] if scoped else request,
                                      "question": answer[:500]}
-        return SkillResult(True, answer, {"command_type": "chat", "response_spoken": bool(spoken)})
 
     async def _resolve_proposal(self, turn, text, context, lease, generation, session_id):
         proposals = self.dialogue_state.proposals

@@ -68,3 +68,5 @@ htmlcov/
 !/docs/NATIVE_UI.md
 !/docs/CONFIGURATION.md
 !/docs/TESTING.md
+!/docs/BEHAVIORAL_CONTRACTS.md
+!/docs/DEVELOPMENT_RULES.md

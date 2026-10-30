@@ -2,7 +2,6 @@
   "description": "C901 ratchet: listed functions may not grow; others must stay <= 10. Regenerate with python -m testing.complexity_budget --update.",
   "threshold": 10,
   "functions": {
-    "config.py::validate_config": 64,
     "core/action_policy.py::natural_action_permission": 11,
     "core/app.py::RavenApp._command_loop": 21,
     "core/app.py::RavenApp._submit_text": 18,
@@ -18,8 +17,6 @@
     "core/listen.py::VoskListener._listen_on_device": 39,
     "core/listen.py::VoskListener.listen_once": 14,
     "core/natural_turn.py::TurnDecoder.finish": 14,
-    "core/processor.py::CommandProcessor._conversation_turn": 22,
-    "core/processor.py::CommandProcessor._natural_turn": 27,
     "core/processor.py::CommandProcessor._restricted_turn": 19,
     "core/processor.py::CommandProcessor.process": 21,
     "core/speak.py::Speaker._speak_with_output": 11,

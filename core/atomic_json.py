@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import shutil
 import threading
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class AtomicJSONFile:
@@ -26,17 +30,37 @@ class AtomicJSONFile:
                 restored = self._restore_latest_backup()
                 return restored if restored is not None else self._clone_default()
 
-    def save(self, data: Any) -> None:
+    def save(self, data: Any, *, forget_history: bool = False) -> None:
+        """Atomic write. forget_history=True is for user-requested deletion:
+        the previous state is not backed up and existing .bakN copies are removed,
+        so deleted records do not survive in rotating backups."""
         with self._lock:
             serialized = json.dumps(data, ensure_ascii=False, indent=2)
             json.loads(serialized)
             temp = self.path.with_suffix(self.path.suffix + ".tmp")
             temp.write_text(serialized + "\n", encoding="utf-8")
 
-            if self.path.exists():
+            if self.path.exists() and not forget_history:
                 self._rotate_backups()
                 shutil.copy2(self.path, self._backup_path(1))
             os.replace(temp, self.path)
+            if forget_history:
+                self.purge_backups()
+
+    def purge_backups(self) -> list[Path]:
+        """Remove every .bakN copy of this file; returns copies that could not be removed."""
+        with self._lock:
+            pattern = re.compile(re.escape(self.path.name) + r"\.bak\d+")
+            remaining = []
+            for backup in self.path.parent.glob(self.path.name + ".bak*"):
+                if not pattern.fullmatch(backup.name):
+                    continue
+                try:
+                    backup.unlink(missing_ok=True)
+                except OSError as exc:
+                    remaining.append(backup)
+                    logger.warning("Backup was not removed: %s (%s)", backup.name, type(exc).__name__)
+            return remaining
 
     def _clone_default(self) -> Any:
         return json.loads(json.dumps(self.default, ensure_ascii=False))

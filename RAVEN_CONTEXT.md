@@ -4,36 +4,38 @@
 учасників, не незмінна специфікація. Перед роботою звір із кодом і Git diff.
 Інструкції роботи: [CLAUDE.md](CLAUDE.md), [AGENTS.md](AGENTS.md).
 
-## Передача роботи — сесія Claude 29–30.10.2026 (зміни НЕ закомічені)
+## Передача роботи — сесії Claude 29–30.10.2026
 
-Перед будь-якою задачею: `git status --short` і `git diff --stat`. Усі зміни нижче
-лежать у робочому каталозі гілки `main` без commit. Commit/push — лише за явним
-дорученням користувача, з переглядом staged-файлів (не `git add .`).
-
-Зроблено за аудитом 29.10.2026 (деталі й перевірки — журнал J121–J126):
+Перед будь-якою задачею: `git status --short` і `git diff --stat`. Аудит 29.10.2026
+№1–№4 закомічено (`a52503d`, без push). №5, №6, №7 і залишок №3 — у робочому
+каталозі без commit. Commit/push — лише за явним дорученням користувача,
+з переглядом staged-файлів (не `git add .`).
 
 | Запис | Пункт аудиту | Суть |
 | --- | --- | --- |
-| J121 | №1, №2 | ключ відновлення показується один раз, не пишеться в корінь; «Душогуб»: `enabled=false` типово, підтвердження кожної цілі, `allowed_targets` для публічних IP/доменів |
-| J122 | №3 крок 1–2 | `tests/test_processor_gate_matrix.py` (знімок 216 комбінацій), `core/turn_gate.py` |
-| J123 | №3 крок 3 | `process` розділено: `_restricted_turn`, `_local_command`, `_conversation_turn`, `_finish_turn` |
-| J124 | №3 | храповик C901: `testing/complexity_budget.py`, `testing/complexity_baseline.json`, поріг 10 у `pyproject.toml` |
-| J125 | №3 | «стоп» у pentest зупиняє мовлення (`_pentest_turn`) |
-| J126 | №4 | переносні тести (`tests/platform_fixtures.py`), Linux CI job |
+| J121 | №1, №2 | ключ відновлення показується один раз; «Душогуб»: `enabled=false`, підтвердження цілі, `allowed_targets` |
+| J122–J125 | №3 | gate matrix (216), `core/turn_gate.py`, розділений `process`, храповик C901, «стоп» у pentest |
+| J126 | №4 | переносні тести, Linux CI job `tests-linux` (уже в ci.yml) |
+| J127 | №5, №3 | `docs/DEVELOPMENT_RULES.md` (публічний шаблон журналу), allowlist + BEHAVIORAL_CONTRACTS; `validate_config`, `_conversation_turn`, `_natural_turn` ≤ 10 |
+| J128 | №6 | «забудь»/очищення пам'яті видаляє `memory.json.bakN` |
+| J129 | №6 | `core/log_retention.py`: ротація logs/sessions (30) і logs/tests (50), ≥7 днів, докази захищено |
+| J130 | №7 | `testing/phrase_corpus.json` + `tests/test_phrase_corpus.py` (65 фраз) |
+
+Останній прогін 30.10.2026 (Windows): tester --all 905/904/0 невдалих/1 пропуск (Node),
+ruff, храповик (порушень 0), `git diff --check` — успішно.
 
 Відкриті дії користувача / наступної сесії:
 
-1. `.github/workflows/ci.yml`: job `tests-linux` підготовлено, але файл не вдалося
-   записати віддалено. Додати job (ubuntu-24.04, Python 3.12, `libportaudio2`,
-   `requirements-ci.txt`, `tester.py --all --verbose`, `ruff check .`) — текст у J126.
-2. Прогнати на Windows `tester.py --all --verbose` після J126 (очікується 890 pass,
-   1 skip — немає Node) і `ruff check .`, `git diff --check`.
-3. `RECOVERY_KEY.txt` у корені досі існує: користувач має перенести ключ і видалити
-   файл сам. Не видаляти автоматично.
-4. Локальний `config.json` не відкривався: явне `pentest.enabled=true` у ньому лишається
-   чинним — повідомити користувача, не змінювати без доручення.
-5. GitHub Actions у сесії недоступний; імовірно Windows-job падав на 6 whisper-тестах
-   (faster-whisper відсутній у `requirements-ci.txt`) — після J126 перевірити статус.
+1. Push і перший запуск GitHub Actions (Windows + `tests-linux`); перевірити, чи падали
+   6 whisper-тестів у Windows CI (faster-whisper не в `requirements-ci.txt`).
+2. Ротацію сесійних журналів (запуск `main.py`) ще не виконано: перший live-старт видалить
+   ~20 старих незареєстрованих `session-*.log`. Новий доказ — реєструвати одразу.
+3. `RECOVERY_KEY.txt` у корені: перенести ключ і видалити файл вручну.
+4. Локальний `config.json` не відкривався: явне `pentest.enabled=true` лишається чинним.
+5. Спостереження J130: «повтори …» проходить загальний `direct_request` (scope=null) —
+   звузити лише за рішенням користувача.
+6. `python -m testing.complexity_budget` у консолі cp1251 падає з UnicodeEncodeError на
+   символі «→»; обхід — `PYTHONUTF8=1`.
 
 Рішення, які не переглядати без користувача:
 
@@ -42,11 +44,11 @@
 - Знімок `test_processor_gate_matrix.py` змінюється лише свідомо, з поясненням у docstring.
 - Базову лінію храповика оновлювати `python -m testing.complexity_budget --update`
   лише після спрощення або свідомого рев'ю diff; числа — ruff/mccabe, не radon.
+- `docs/README.md` лишається локальним навігатором; публічні правила — DEVELOPMENT_RULES.md.
+- Очікування в `phrase_corpus.json` змінюються лише свідомо, з `note`.
 
-Наступні пункти аудиту за пріоритетом: №5 (`docs/README.md` і
-`docs/BEHAVIORAL_CONTRACTS.md` у Git allowlist), №6 (ротація журналів,
-`.bak` після «забудь»), №7 (еталонний корпус фраз), залишок №3
-(`validate_config` 64, `_natural_turn` 27, `_conversation_turn` 22 за ruff).
+Залишок №3 за ruff: `process` 21, `_restricted_turn` 19 (core/processor.py) та інші з
+`testing/complexity_baseline.json`.
 
 Застереження для `docs/DEVELOPMENT_LOG.md`: частина файлу до J115 має CRLF, новіша — LF.
 Додавати записи побайтово (читати/писати в binary або `newline=''`), не нормалізувати.

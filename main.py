@@ -165,6 +165,8 @@ def main() -> int:
     try:
         with session:
             console_print(f"Журнал сесії: {session.path}")
+            from core.log_retention import prune_quietly, prune_sessions
+            prune_quietly(prune_sessions, Path(__file__).resolve().parent)
             try:
                 if getattr(args, 'ui', None) == 'native':
                     try:

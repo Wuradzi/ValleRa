@@ -312,151 +312,202 @@ def apply_performance_profile(
     return config
 
 
+_GROQ_MODELS = {'whisper-large-v3-turbo', 'whisper-large-v3'}
+
+
+def _validate_stt_selection(stt: dict[str, Any]) -> None:
+    if stt['backend'] not in {'auto', 'faster-whisper', 'sherpa-onnx', 'vosk', 'groq'}:
+        raise ConfigError('Invalid stt.backend')
+    if stt['groq_model'] not in _GROQ_MODELS:
+        raise ConfigError('Invalid stt.groq_model')
+    if type(stt['groq_timeout_seconds']) is not int or not 1 <= stt['groq_timeout_seconds'] <= 120:
+        raise ConfigError('stt.groq_timeout_seconds must be 1..120')
+    if stt['profile'] not in {'auto', 'quality', 'balanced', 'edge', 'low_resource'}:
+        raise ConfigError('Invalid stt.profile')
+    if stt.get('quality_profile') not in {None, 'quality', 'balanced', 'edge', 'low_resource'}:
+        raise ConfigError('Invalid legacy stt.quality_profile')
+    profiles = stt['profiles']
+    if not isinstance(profiles, dict) or set(profiles) != {'quality', 'balanced', 'edge'}:
+        raise ConfigError('stt.profiles requires quality, balanced, edge')
+    for name, item in profiles.items():
+        _validate_stt_profile_engine(name, item)
+        _validate_stt_profile_targets(item)
+
+
+def _validate_stt_profile_engine(name: str, item: Any) -> None:
+    if not isinstance(item, dict) or set(item) - {'backend', 'model', 'device', 'compute_type',
+            'target_ram_mb', 'target_rtf', 'hotwords', 'initial_prompt',
+            'escalation_model', 'escalation_confidence'}:
+        raise ConfigError('Invalid STT profile fields')
+    if item['backend'] not in {'faster-whisper', 'sherpa-onnx', 'vosk', 'groq'}:
+        raise ConfigError('Invalid profile backend')
+    if item['backend'] == 'groq' and item['model'] not in _GROQ_MODELS:
+        raise ConfigError('Invalid Groq profile model')
+    if not isinstance(item['model'], str) or not item['model'].strip():
+        raise ConfigError('Profile model is required')
+    if item['device'] not in {'auto', 'cpu', 'cuda'} or (name != 'quality' and item['device'] != 'cpu'):
+        raise ConfigError('balanced/edge must use CPU')
+    if item['compute_type'] not in {'auto', 'int8', 'float32', 'float16', 'int8_float16'}:
+        raise ConfigError('Invalid compute type')
+
+
+def _validate_stt_profile_targets(item: dict[str, Any]) -> None:
+    if type(item['target_ram_mb']) is not int or item['target_ram_mb'] <= 0:
+        raise ConfigError('Invalid RAM target')
+    if type(item['target_rtf']) not in {int, float} or not 0 < item['target_rtf'] <= 100:
+        raise ConfigError('Invalid RTF target')
+    if item.get('escalation_model', '') not in {'', 'large-v3'}:
+        raise ConfigError('Only optional large-v3 escalation is supported')
+    if item.get('escalation_model') and (item['backend'] != 'faster-whisper' or item['model'] != 'large-v3-turbo'):
+        raise ConfigError('Escalation requires faster-whisper large-v3-turbo primary')
+    if type(item.get('escalation_confidence', .8)) not in {float, int} or not .5 <= item.get('escalation_confidence', .8) <= 1:
+        raise ConfigError('Invalid escalation confidence')
+
+
+def _validate_stt_runtime(stt: dict[str, Any]) -> None:
+    if (type(stt['pcm_short_silence_ms']) is not int or type(stt['pcm_long_silence_ms']) is not int
+            or not 500 <= stt['pcm_short_silence_ms'] <= stt['pcm_long_silence_ms'] <= 2500):
+        raise ConfigError('PCM silence must satisfy 500 <= short <= long <= 2500')
+    if stt['primary_device'] not in {'auto', 'cpu', 'cuda'}:
+        raise ConfigError('stt.primary_device: auto, cpu або cuda')
+    if stt['fallback_backend'] not in {'none', 'vosk'}:
+        raise ConfigError('stt.fallback_backend: none або vosk')
+    if type(stt['primary_local_files_only']) is not bool:
+        raise ConfigError('stt.primary_local_files_only має бути boolean')
+    if type(stt['utterance_max_seconds']) is not int or not 15 <= stt['utterance_max_seconds'] <= 60:
+        raise ConfigError('stt.utterance_max_seconds має бути 15..60')
+    if type(stt['primary_timeout_ms']) is not int or not 1000 <= stt['primary_timeout_ms'] <= 300000:
+        raise ConfigError('stt.primary_timeout_ms має бути 1000..300000')
+    if not isinstance(stt['low_resource_model'], str) or not stt['low_resource_model'].strip():
+        raise ConfigError('stt.low_resource_model не може бути порожнім')
+
+
+def _validate_commands_and_identity(config: dict[str, Any]) -> None:
+    if type(config["commands"]["llm_interpretation"]) is not bool:
+        raise ConfigError("commands.llm_interpretation має бути true або false")
+    if type(config["commands"]["natural_actions"]) is not bool:
+        raise ConfigError("commands.natural_actions має бути true або false")
+    command_timeout = config["commands"]["interpretation_timeout_seconds"]
+    if type(command_timeout) is not int or not 1 <= command_timeout <= 30:
+        raise ConfigError("commands.interpretation_timeout_seconds має бути цілим числом від 1 до 30")
+    if config["performance"]["profile"] not in {
+        "balanced",
+        "fast",
+        "raspberry_pi",
+    }:
+        raise ConfigError(
+            "performance.profile має бути balanced, fast або raspberry_pi"
+        )
+    if not str(config["assistant_name"]).strip():
+        raise ConfigError("assistant_name не може бути порожнім")
+    if not str(config["language"]).strip():
+        raise ConfigError("language не може бути порожньою")
+
+
+def _validate_stt_capture(stt: dict[str, Any]) -> None:
+    if not 0 <= float(stt["command_confidence_threshold"]) <= 1:
+        raise ConfigError("stt.command_confidence_threshold має бути від 0 до 1")
+    if not 0 <= float(stt["chat_confidence_threshold"]) <= 1:
+        raise ConfigError("stt.chat_confidence_threshold має бути від 0 до 1")
+    if not 0 <= float(stt["whisper"]["min_confidence"]) <= 1:
+        raise ConfigError("stt.whisper.min_confidence має бути від 0 до 1")
+    if int(stt["sample_rate"]) <= 0:
+        raise ConfigError("stt.sample_rate має бути додатним")
+    block_ms = stt["audio_block_ms"]
+    if type(block_ms) is not int or block_ms not in {50, 100, 250}:
+        raise ConfigError("stt.audio_block_ms має бути 50, 100 або 250")
+
+
+def _validate_stt_endpoint(stt: dict[str, Any]) -> None:
+    endpoint_ms = stt["endpoint_silence_ms"]
+    if type(stt["endpoint_adaptive"]) is not bool:
+        raise ConfigError("stt.endpoint_adaptive має бути true або false")
+    if stt.get("refinement_policy", "legacy") not in ("legacy", "vosk_first"):
+        raise ConfigError("stt.refinement_policy має бути legacy або vosk_first")
+    if type(endpoint_ms) is not int or endpoint_ms not in {0, 1200, 1400, 1600}:
+        raise ConfigError("stt.endpoint_silence_ms має бути 0 (штатний Vosk), 1200, 1400 або 1600")
+    if not isinstance(stt['selective_whisper_enabled'], bool):
+        raise ConfigError('stt.selective_whisper_enabled має бути boolean')
+    if not 0.5 <= float(stt['vosk_chat_confidence']) <= 1:
+        raise ConfigError('stt.vosk_chat_confidence має бути від 0.5 до 1')
+    if not 0 < int(stt['whisper_soft_budget_ms']) <= int(stt['whisper_hard_budget_ms']) <= 60000:
+        raise ConfigError('Whisper budgets: 0 < soft <= hard <= 60000 ms')
+
+
+def _validate_timeouts(config: dict[str, Any]) -> None:
+    if int(config["stt"]["whisper"]["beam_size"]) <= 0:
+        raise ConfigError("stt.whisper.beam_size має бути додатним")
+    if int(config["stt"]["whisper"]["cpu_threads"]) < 0:
+        raise ConfigError("stt.whisper.cpu_threads має бути невід'ємним; 0 означає автоматичний вибір")
+    if int(config["confirmation_timeout_seconds"]) <= 0:
+        raise ConfigError("confirmation_timeout_seconds має бути додатним")
+    if int(config["llm"]["timeout_seconds"]) <= 0:
+        raise ConfigError("llm.timeout_seconds має бути додатним")
+    if int(config["llm"]["total_timeout_seconds"]) <= 0:
+        raise ConfigError("llm.total_timeout_seconds має бути додатним")
+    if not 0 <= int(config["fuzzy_threshold"]) <= 100:
+        raise ConfigError("fuzzy_threshold має бути від 0 до 100")
+
+
+def _validate_pentest(pentest: dict[str, Any]) -> None:
+    if int(pentest["max_hosts"]) < 1:
+        raise ConfigError("security.pentest.max_hosts має бути не менше 1")
+    if not 1 <= int(pentest["concurrency"]) <= 1000:
+        raise ConfigError("security.pentest.concurrency має бути від 1 до 1000")
+    from services.pentest.scope import ScopeError, TargetAllowlist
+    try:
+        TargetAllowlist.parse(pentest["allowed_targets"])
+    except ScopeError as exc:
+        raise ConfigError(f"security.pentest.allowed_targets: {exc}") from exc
+
+
+def _validate_llm_order(llm: dict[str, Any]) -> None:
+    supported = {"gemini", "groq", "openai", "anthropic", "ollama"}
+    order = list(llm["order"])
+    unknown = [name for name in order if name not in supported]
+    if unknown:
+        raise ConfigError(f"Невідомі LLM-провайдери: {', '.join(unknown)}")
+    if len(order) != len(set(order)):
+        raise ConfigError("llm.order не повинен містити дублікати")
+
+
+def _validate_audio_devices(config: dict[str, Any]) -> None:
+    for name in ("input_device",):
+        value = config["stt"].get(name)
+        if value is not None and not isinstance(value, int):
+            raise ConfigError(f"stt.{name} має бути числом або null")
+    value = config["tts"].get("output_device")
+    if value is not None and not isinstance(value, int):
+        raise ConfigError("tts.output_device має бути числом або null")
+
+
+def _validate_file_search(config: dict[str, Any]) -> None:
+    if not isinstance(config["user_directories"], list):
+        raise ConfigError("user_directories має бути списком")
+    if any(not isinstance(path, str) or not path.strip() for path in config["user_directories"]):
+        raise ConfigError("user_directories має містити непорожні шляхи")
+    if type(config["file_search"]["all_local_drives"]) is not bool:
+        raise ConfigError("file_search.all_local_drives має бути true/false")
+    budget = config["file_search"]["budget_seconds"]
+    if type(budget) not in (int, float) or not 1 <= budget <= 60:
+        raise ConfigError("file_search.budget_seconds має бути від 1 до 60")
+
+
 def validate_config(config: dict[str, Any]) -> None:
+    # Check order is part of the contract: the first failing rule names the error.
     try:
         if config.get('config_version', 2) != 2:
             raise ConfigError('Unsupported config_version')
-        stt = config['stt']
-        if stt['backend'] not in {'auto', 'faster-whisper', 'sherpa-onnx', 'vosk', 'groq'}:
-            raise ConfigError('Invalid stt.backend')
-        if stt['groq_model'] not in {'whisper-large-v3-turbo', 'whisper-large-v3'}:
-            raise ConfigError('Invalid stt.groq_model')
-        if type(stt['groq_timeout_seconds']) is not int or not 1 <= stt['groq_timeout_seconds'] <= 120:
-            raise ConfigError('stt.groq_timeout_seconds must be 1..120')
-        if stt['profile'] not in {'auto', 'quality', 'balanced', 'edge', 'low_resource'}:
-            raise ConfigError('Invalid stt.profile')
-        if stt.get('quality_profile') not in {None, 'quality', 'balanced', 'edge', 'low_resource'}:
-            raise ConfigError('Invalid legacy stt.quality_profile')
-        profiles = stt['profiles']
-        if not isinstance(profiles, dict) or set(profiles) != {'quality', 'balanced', 'edge'}:
-            raise ConfigError('stt.profiles requires quality, balanced, edge')
-        for name, item in profiles.items():
-            if not isinstance(item, dict) or set(item) - {'backend', 'model', 'device', 'compute_type',
-                    'target_ram_mb', 'target_rtf', 'hotwords', 'initial_prompt',
-                    'escalation_model', 'escalation_confidence'}:
-                raise ConfigError('Invalid STT profile fields')
-            if item['backend'] not in {'faster-whisper', 'sherpa-onnx', 'vosk', 'groq'}:
-                raise ConfigError('Invalid profile backend')
-            if item['backend'] == 'groq' and item['model'] not in {'whisper-large-v3-turbo', 'whisper-large-v3'}:
-                raise ConfigError('Invalid Groq profile model')
-            if not isinstance(item['model'], str) or not item['model'].strip():
-                raise ConfigError('Profile model is required')
-            if item['device'] not in {'auto', 'cpu', 'cuda'} or (name != 'quality' and item['device'] != 'cpu'):
-                raise ConfigError('balanced/edge must use CPU')
-            if item['compute_type'] not in {'auto', 'int8', 'float32', 'float16', 'int8_float16'}:
-                raise ConfigError('Invalid compute type')
-            if type(item['target_ram_mb']) is not int or item['target_ram_mb'] <= 0:
-                raise ConfigError('Invalid RAM target')
-            if type(item['target_rtf']) not in {int, float} or not 0 < item['target_rtf'] <= 100:
-                raise ConfigError('Invalid RTF target')
-            if item.get('escalation_model', '') not in {'', 'large-v3'}:
-                raise ConfigError('Only optional large-v3 escalation is supported')
-            if item.get('escalation_model') and (item['backend'] != 'faster-whisper' or item['model'] != 'large-v3-turbo'):
-                raise ConfigError('Escalation requires faster-whisper large-v3-turbo primary')
-            if type(item.get('escalation_confidence', .8)) not in {float, int} or not .5 <= item.get('escalation_confidence', .8) <= 1:
-                raise ConfigError('Invalid escalation confidence')
-        if (type(stt['pcm_short_silence_ms']) is not int or type(stt['pcm_long_silence_ms']) is not int
-                or not 500 <= stt['pcm_short_silence_ms'] <= stt['pcm_long_silence_ms'] <= 2500):
-            raise ConfigError('PCM silence must satisfy 500 <= short <= long <= 2500')
-        if stt['primary_device'] not in {'auto', 'cpu', 'cuda'}:
-            raise ConfigError('stt.primary_device: auto, cpu або cuda')
-        if stt['fallback_backend'] not in {'none', 'vosk'}:
-            raise ConfigError('stt.fallback_backend: none або vosk')
-        if type(stt['primary_local_files_only']) is not bool:
-            raise ConfigError('stt.primary_local_files_only має бути boolean')
-        if type(stt['utterance_max_seconds']) is not int or not 15 <= stt['utterance_max_seconds'] <= 60:
-            raise ConfigError('stt.utterance_max_seconds має бути 15..60')
-        if type(stt['primary_timeout_ms']) is not int or not 1000 <= stt['primary_timeout_ms'] <= 300000:
-            raise ConfigError('stt.primary_timeout_ms має бути 1000..300000')
-        if not isinstance(stt['low_resource_model'], str) or not stt['low_resource_model'].strip():
-            raise ConfigError('stt.low_resource_model не може бути порожнім')
-        if type(config["commands"]["llm_interpretation"]) is not bool:
-            raise ConfigError("commands.llm_interpretation має бути true або false")
-        if type(config["commands"]["natural_actions"]) is not bool:
-            raise ConfigError("commands.natural_actions має бути true або false")
-        command_timeout = config["commands"]["interpretation_timeout_seconds"]
-        if type(command_timeout) is not int or not 1 <= command_timeout <= 30:
-            raise ConfigError("commands.interpretation_timeout_seconds має бути цілим числом від 1 до 30")
-        if config["performance"]["profile"] not in {
-            "balanced",
-            "fast",
-            "raspberry_pi",
-        }:
-            raise ConfigError(
-                "performance.profile має бути balanced, fast або raspberry_pi"
-            )
-        if not str(config["assistant_name"]).strip():
-            raise ConfigError("assistant_name не може бути порожнім")
-        if not str(config["language"]).strip():
-            raise ConfigError("language не може бути порожньою")
-        if not 0 <= float(config["stt"]["command_confidence_threshold"]) <= 1:
-            raise ConfigError("stt.command_confidence_threshold має бути від 0 до 1")
-        if not 0 <= float(config["stt"]["chat_confidence_threshold"]) <= 1:
-            raise ConfigError("stt.chat_confidence_threshold має бути від 0 до 1")
-        if not 0 <= float(config["stt"]["whisper"]["min_confidence"]) <= 1:
-            raise ConfigError("stt.whisper.min_confidence має бути від 0 до 1")
-        if int(config["stt"]["sample_rate"]) <= 0:
-            raise ConfigError("stt.sample_rate має бути додатним")
-        block_ms = config["stt"]["audio_block_ms"]
-        if type(block_ms) is not int or block_ms not in {50, 100, 250}:
-            raise ConfigError("stt.audio_block_ms має бути 50, 100 або 250")
-        endpoint_ms = config["stt"]["endpoint_silence_ms"]
-        if type(config["stt"]["endpoint_adaptive"]) is not bool:
-            raise ConfigError("stt.endpoint_adaptive має бути true або false")
-        if config["stt"].get("refinement_policy", "legacy") not in ("legacy", "vosk_first"):
-            raise ConfigError("stt.refinement_policy має бути legacy або vosk_first")
-        if type(endpoint_ms) is not int or endpoint_ms not in {0, 1200, 1400, 1600}:
-            raise ConfigError("stt.endpoint_silence_ms має бути 0 (штатний Vosk), 1200, 1400 або 1600")
-        if not isinstance(config['stt']['selective_whisper_enabled'], bool):
-            raise ConfigError('stt.selective_whisper_enabled має бути boolean')
-        if not 0.5 <= float(config['stt']['vosk_chat_confidence']) <= 1:
-            raise ConfigError('stt.vosk_chat_confidence має бути від 0.5 до 1')
-        if not 0 < int(config['stt']['whisper_soft_budget_ms']) <= int(config['stt']['whisper_hard_budget_ms']) <= 60000:
-            raise ConfigError('Whisper budgets: 0 < soft <= hard <= 60000 ms')
-        if int(config["stt"]["whisper"]["beam_size"]) <= 0:
-            raise ConfigError("stt.whisper.beam_size має бути додатним")
-        if int(config["stt"]["whisper"]["cpu_threads"]) < 0:
-            raise ConfigError("stt.whisper.cpu_threads має бути невід'ємним; 0 означає автоматичний вибір")
-        if int(config["confirmation_timeout_seconds"]) <= 0:
-            raise ConfigError("confirmation_timeout_seconds має бути додатним")
-        if int(config["llm"]["timeout_seconds"]) <= 0:
-            raise ConfigError("llm.timeout_seconds має бути додатним")
-        if int(config["llm"]["total_timeout_seconds"]) <= 0:
-            raise ConfigError("llm.total_timeout_seconds має бути додатним")
-        if not 0 <= int(config["fuzzy_threshold"]) <= 100:
-            raise ConfigError("fuzzy_threshold має бути від 0 до 100")
-        if int(config["security"]["pentest"]["max_hosts"]) < 1:
-            raise ConfigError("security.pentest.max_hosts має бути не менше 1")
-        if not 1 <= int(config["security"]["pentest"]["concurrency"]) <= 1000:
-            raise ConfigError("security.pentest.concurrency має бути від 1 до 1000")
-        from services.pentest.scope import ScopeError, TargetAllowlist
-        try:
-            TargetAllowlist.parse(config["security"]["pentest"]["allowed_targets"])
-        except ScopeError as exc:
-            raise ConfigError(f"security.pentest.allowed_targets: {exc}") from exc
-        supported = {"gemini", "groq", "openai", "anthropic", "ollama"}
-        order = list(config["llm"]["order"])
-        unknown = [name for name in order if name not in supported]
-        if unknown:
-            raise ConfigError(f"Невідомі LLM-провайдери: {', '.join(unknown)}")
-        if len(order) != len(set(order)):
-            raise ConfigError("llm.order не повинен містити дублікати")
-        for field in ("input_device",):
-            value = config["stt"].get(field)
-            if value is not None and not isinstance(value, int):
-                raise ConfigError(f"stt.{field} має бути числом або null")
-        value = config["tts"].get("output_device")
-        if value is not None and not isinstance(value, int):
-            raise ConfigError("tts.output_device має бути числом або null")
-        if not isinstance(config["user_directories"], list):
-            raise ConfigError("user_directories має бути списком")
-        if any(not isinstance(path, str) or not path.strip() for path in config["user_directories"]):
-            raise ConfigError("user_directories має містити непорожні шляхи")
-        if type(config["file_search"]["all_local_drives"]) is not bool:
-            raise ConfigError("file_search.all_local_drives має бути true/false")
-        budget = config["file_search"]["budget_seconds"]
-        if type(budget) not in (int, float) or not 1 <= budget <= 60:
-            raise ConfigError("file_search.budget_seconds має бути від 1 до 60")
+        _validate_stt_selection(config['stt'])
+        _validate_stt_runtime(config['stt'])
+        _validate_commands_and_identity(config)
+        _validate_stt_capture(config["stt"])
+        _validate_stt_endpoint(config["stt"])
+        _validate_timeouts(config)
+        _validate_pentest(config["security"]["pentest"])
+        _validate_llm_order(config["llm"])
+        _validate_audio_devices(config)
+        _validate_file_search(config)
     except (KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, ConfigError):
             raise
