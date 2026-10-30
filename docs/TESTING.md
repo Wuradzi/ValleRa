@@ -47,6 +47,41 @@ python tester.py --all --failfast --verbose --timeout 300
 файла `tester.py`. Нові центральні перевірки можна також додавати в цьому ж
 файлі, як вбудовану самоперевірку `TesterChecks`.
 
+### Переносні офлайн-тести (Windows і Linux)
+
+Офлайн-набір має проходити й на Windows, і на Linux. У CI це два job: `tests`
+(Windows) і `tests-linux` (Ubuntu). Тест, що залежить від платформи, використовує
+фікстури з `tests/platform_fixtures.py` і не мовчить про пропуск:
+
+| Фікстура | Коли застосовувати |
+| --- | --- |
+| `hermetic_sounddevice`, `sounddevice_or_stub()` | тест захоплення звуку з замоканим потоком; заглушка лише без PortAudio |
+| `with_tts_capable_platform(speaker)` | логіка черги/стопу/воркера `Speaker`; синтез і відтворення замокані |
+| `windows_shell_platform()` | Windows-гілка коду, яка вибирається за `resolve_platform().os` |
+| `requires_package("faster_whisper")` | тест справжнього API опційного пакета |
+| `WINDOWS_ONLY` (у `tester.py` — `WORKPLACE_WINDOWS_ONLY`) | функція, оголошена лише для Windows у manifest |
+
+Пропуск за можливістю — лише для коду, який на цій платформі не реалізований.
+Логіку, що не залежить від ОС, запускайте всюди через підставлену можливість.
+
+### Храповик складності (C901)
+
+`tests/test_complexity_budget.py` запускає `ruff --select C901` (mccabe) над кодом
+застосунку (без `docs/`). Поріг — `max-complexity` у `[tool.ruff.lint.mccabe]`
+файла `pyproject.toml` (зараз 10). Функції, що вже перевищують поріг, записані в
+`testing/complexity_baseline.json`, і їхня складність не може зрости. Нова функція
+понад поріг — порушення. Глобальний `ruff check .` правило C901 не вмикає.
+
+```powershell
+python -m testing.complexity_budget            # звіт, порушення й що можна посилити
+python -m testing.complexity_budget --update   # переписати базову лінію
+```
+
+Після спрощення функції оновіть базову лінію, щоб зафіксувати нове, нижче значення.
+`--update` переписує файл повністю, тож перед комітом перегляньте його diff: зростання
+складності в ньому має бути свідомим рішенням. Без ruff тест пропускається з
+поясненням, а не проходить мовчки.
+
 ### Живі перевірки та заміри — у тому самому тестері
 
 **Сумісність після Phase 3A.2:** наведені нижче порівняння `whisper`, `recorded`,

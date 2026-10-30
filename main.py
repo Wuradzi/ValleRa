@@ -58,6 +58,18 @@ def unlock_vault(settings, password_prompt=console_getpass) -> SecretStore:
     return vault
 
 
+def warn_local_recovery_copy(project_root: Path) -> bool:
+    """A recovery key beside data/secrets.json unlocks the vault without the password."""
+    if not (project_root / "RECOVERY_KEY.txt").exists():
+        return False
+    console_print(
+        "УВАГА: у папці проєкту є RECOVERY_KEY.txt. Будь-хто з доступом до папки "
+        "розшифрує сховище без майстер-пароля. Перенесіть ключ у менеджер паролів "
+        "або на окремий носій і видаліть цей файл."
+    )
+    return True
+
+
 async def async_main(args=None, native_bridge=None) -> int:
     args = args or parse_args()
     if not 0 <= args.web_port <= 65535:
@@ -90,6 +102,7 @@ async def async_main(args=None, native_bridge=None) -> int:
     if not instance.acquire():
         console_print("Raven вже запущений.")
         return 2
+    warn_local_recovery_copy(settings.paths.project_root)
 
     try:
         vault = unlock_vault(settings, native_bridge.password) if native_bridge else unlock_vault(settings)

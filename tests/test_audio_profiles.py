@@ -14,6 +14,7 @@ from services.audio.profiles import resolve_profile
 from services.audio.backends import primary_settings, FasterWhisperBackend, create_backend
 from services.audio.sherpa_backend import SherpaOnnxBackend
 from testing.probes.stt_benchmark import semantic_scores, aggregate, scores, read_matrix, _variant
+from tests.platform_fixtures import requires_package
 
 
 class DeploymentProfileTests(unittest.TestCase):
@@ -76,6 +77,7 @@ class DeploymentProfileTests(unittest.TestCase):
         self.assertEqual(config['stt']['backend'], 'auto')
         validate_config(config)
 
+    @requires_package("faster_whisper")
     def test_missing_quality_never_downloads_online(self):
         self.settings.stt_primary_local_files_only = False  # Legacy knob cannot enable startup downloads.
         self.settings.stt_profile = 'quality'

@@ -18,6 +18,7 @@ from core.performance import DISABLED_PERFORMANCE, TurnTiming
 from core.speak import Speaker
 from services.audio.whisper_process import ProcessWhisperRecognizer, _worker
 from services.audio.refinement import RefinementWait
+from tests.platform_fixtures import with_tts_capable_platform
 
 
 class InterruptingConnection:
@@ -510,7 +511,7 @@ class SpeakerLifecycleTests(unittest.IsolatedAsyncioTestCase):
         return Speaker(Settings(ProjectPaths.from_root(Path(temp.name))))
 
     async def test_known_answer_is_queued_in_phrases(self):
-        speaker = self.speaker()
+        speaker = with_tts_capable_platform(self.speaker())
         await speaker.say("Перша фраза. Друга фраза.")
         self.assertEqual(speaker._queue.get_nowait().text, "Перша фраза.")
         self.assertEqual(speaker._queue.get_nowait().text, "Друга фраза.")

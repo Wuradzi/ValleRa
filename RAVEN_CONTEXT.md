@@ -4,6 +4,53 @@
 учасників, не незмінна специфікація. Перед роботою звір із кодом і Git diff.
 Інструкції роботи: [CLAUDE.md](CLAUDE.md), [AGENTS.md](AGENTS.md).
 
+## Передача роботи — сесія Claude 29–30.10.2026 (зміни НЕ закомічені)
+
+Перед будь-якою задачею: `git status --short` і `git diff --stat`. Усі зміни нижче
+лежать у робочому каталозі гілки `main` без commit. Commit/push — лише за явним
+дорученням користувача, з переглядом staged-файлів (не `git add .`).
+
+Зроблено за аудитом 29.10.2026 (деталі й перевірки — журнал J121–J126):
+
+| Запис | Пункт аудиту | Суть |
+| --- | --- | --- |
+| J121 | №1, №2 | ключ відновлення показується один раз, не пишеться в корінь; «Душогуб»: `enabled=false` типово, підтвердження кожної цілі, `allowed_targets` для публічних IP/доменів |
+| J122 | №3 крок 1–2 | `tests/test_processor_gate_matrix.py` (знімок 216 комбінацій), `core/turn_gate.py` |
+| J123 | №3 крок 3 | `process` розділено: `_restricted_turn`, `_local_command`, `_conversation_turn`, `_finish_turn` |
+| J124 | №3 | храповик C901: `testing/complexity_budget.py`, `testing/complexity_baseline.json`, поріг 10 у `pyproject.toml` |
+| J125 | №3 | «стоп» у pentest зупиняє мовлення (`_pentest_turn`) |
+| J126 | №4 | переносні тести (`tests/platform_fixtures.py`), Linux CI job |
+
+Відкриті дії користувача / наступної сесії:
+
+1. `.github/workflows/ci.yml`: job `tests-linux` підготовлено, але файл не вдалося
+   записати віддалено. Додати job (ubuntu-24.04, Python 3.12, `libportaudio2`,
+   `requirements-ci.txt`, `tester.py --all --verbose`, `ruff check .`) — текст у J126.
+2. Прогнати на Windows `tester.py --all --verbose` після J126 (очікується 890 pass,
+   1 skip — немає Node) і `ruff check .`, `git diff --check`.
+3. `RECOVERY_KEY.txt` у корені досі існує: користувач має перенести ключ і видалити
+   файл сам. Не видаляти автоматично.
+4. Локальний `config.json` не відкривався: явне `pentest.enabled=true` у ньому лишається
+   чинним — повідомити користувача, не змінювати без доручення.
+5. GitHub Actions у сесії недоступний; імовірно Windows-job падав на 6 whisper-тестах
+   (faster-whisper відсутній у `requirements-ci.txt`) — після J126 перевірити статус.
+
+Рішення, які не переглядати без користувача:
+
+- «Стоп» від Groq без confidence лишається без винятку стоп-фрази (J90, підтверджено
+  користувачем 30.10.2026); кнопка зупинки в UI працює.
+- Знімок `test_processor_gate_matrix.py` змінюється лише свідомо, з поясненням у docstring.
+- Базову лінію храповика оновлювати `python -m testing.complexity_budget --update`
+  лише після спрощення або свідомого рев'ю diff; числа — ruff/mccabe, не radon.
+
+Наступні пункти аудиту за пріоритетом: №5 (`docs/README.md` і
+`docs/BEHAVIORAL_CONTRACTS.md` у Git allowlist), №6 (ротація журналів,
+`.bak` після «забудь»), №7 (еталонний корпус фраз), залишок №3
+(`validate_config` 64, `_natural_turn` 27, `_conversation_turn` 22 за ruff).
+
+Застереження для `docs/DEVELOPMENT_LOG.md`: частина файлу до J115 має CRLF, новіша — LF.
+Додавати записи побайтово (читати/писати в binary або `newline=''`), не нормалізувати.
+
 ## Продукт і пріоритети
 
 Raven (Рейвен) — українськомовний голосовий співрозмовник із контрольованими

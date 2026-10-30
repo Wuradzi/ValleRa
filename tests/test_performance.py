@@ -18,6 +18,7 @@ from core.speak import Speaker
 from services.audio.whisper import WhisperRecognizer
 from services.audio.whisper_process import ProcessWhisperRecognizer, _worker
 from testing.probes.performance import summarize
+from tests.platform_fixtures import with_tts_capable_platform
 
 
 class RecorderTests(unittest.TestCase):
@@ -168,7 +169,7 @@ class BackendTimingTests(unittest.TestCase):
         self.assertIn("whisper.roundtrip_prepare", rows)
 
     def test_tts_speak_event_is_not_a_completion_acknowledgement(self):
-        speaker = Speaker(self.settings())
+        speaker = with_tts_capable_platform(Speaker(self.settings()))
         speaker._tts_process = Mock(stdin=io.StringIO(), poll=Mock(return_value=None))
         speaker._tts_responses = queue.Queue()
         speaker._tts_responses.put({"event": "speak_call"})

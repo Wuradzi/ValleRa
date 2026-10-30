@@ -11,6 +11,7 @@ from core.listen import VoskListener
 from core.models import RecognitionResult
 from services.audio.endpoint import QuietEndpoint
 from testing.probes.recorded import replay
+from tests.platform_fixtures import hermetic_sounddevice
 
 
 class ContinuationTests(unittest.TestCase):
@@ -35,6 +36,7 @@ class ContinuationTests(unittest.TestCase):
         self.assertTrue(endpoint.ready('', now=11.61))
         self.assertAlmostEqual(endpoint.wait_actual_ms, 410)
 
+    @hermetic_sounddevice
     def test_refinement_reassesses_final_selected_text_not_stale_vosk_flags(self):
         with tempfile.TemporaryDirectory() as directory:
             listener = VoskListener(Settings(ProjectPaths.from_root(Path(directory)), stt_endpoint_adaptive=True))

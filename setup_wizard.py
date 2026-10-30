@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import shutil
@@ -10,7 +11,8 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 from config import default_config, merge_config, validate_config
-from core.console import console_getpass, console_input as input, console_print as print
+from core.console import console_getpass, console_input as input, console_print as print, console_stream
+from core.logging_setup import register_secret
 from services.audio.calibration import calibrate_microphone
 from services.storage.secret_store import SecretStore
 
@@ -80,6 +82,71 @@ def _atomic_write(path: Path, value: str) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+RECOVERY_CONFIRM_CHARS = 6
+
+
+def _hidden_prompt(prompt: str) -> str:
+    # Not console_getpass: a short suffix must not become a global log-redaction token.
+    return getpass.getpass(prompt, stream=console_stream(error=True))
+
+
+def recovery_export_allowed(path: Path, project_root: Path) -> str | None:
+    """Return a refusal reason, or None when the key may be written to this path."""
+    target = path.expanduser().resolve()
+    root = project_root.resolve()
+    if target == root or root in target.parents:
+        return "файл у папці проєкту лежить поруч зі сховищем і знецінює ключ"
+    if target.exists():
+        return "файл уже існує; перезапис не виконую"
+    if not target.parent.is_dir():
+        return "папки для файлу не існує"
+    return None
+
+
+def deliver_recovery_key(
+    recovery_key: str,
+    project_root: Path,
+    *,
+    ask=None,
+    ask_secret=None,
+    out=None,
+) -> Path | None:
+    """Show the key once, require proof it was saved; never store it beside the vault."""
+    ask = ask or (lambda prompt: input(prompt))
+    ask_secret = ask_secret or _hidden_prompt
+    out = out or console_stream()
+    # The key goes to the terminal only; session logs mask it if it ever reaches them.
+    register_secret(recovery_key)
+    out.write(
+        "\n=== КЛЮЧ ВІДНОВЛЕННЯ RAVEN (показується один раз) ===\n"
+        f"{recovery_key}\n"
+        "Збережіть його в менеджері паролів або на окремому носії.\n"
+        "Без нього втрачений майстер-пароль не відновити.\n\n"
+    )
+    out.flush()
+    expected = recovery_key[-RECOVERY_CONFIRM_CHARS:]
+    while ask_secret(
+        f"Введіть останні {RECOVERY_CONFIRM_CHARS} символів ключа для підтвердження: "
+    ).strip() != expected:
+        print("Не збігається. Перевірте збережену копію ключа.")
+
+    while True:
+        raw = ask(
+            "Шлях до файлу з копією ключа поза папкою проєкту (Enter — не зберігати у файл): "
+        ).strip().strip('"')
+        if not raw:
+            return None
+        path = Path(raw)
+        reason = recovery_export_allowed(path, project_root)
+        if reason:
+            print(f"Не збережено: {reason}.")
+            continue
+        target = path.expanduser().resolve()
+        _atomic_write(target, "КЛЮЧ ВІДНОВЛЕННЯ RAVEN\n\n" + recovery_key + "\n")
+        print(f"Копію ключа записано у {target}. Тримайте її окремо від комп’ютера з Raven.")
+        return target
 
 
 def run_first_start_wizard(project_root: Path) -> None:
@@ -156,16 +223,6 @@ def run_first_start_wizard(project_root: Path) -> None:
             print("Паролі не збігаються або порожні.")
 
         recovery_key = vault.create(password)
-        recovery_file = project_root / "RECOVERY_KEY.txt"
-        _atomic_write(
-            recovery_file,
-            "КЛЮЧ ВІДНОВЛЕННЯ RAVEN\n\n" + recovery_key + "\n",
-        )
-        try:
-            recovery_file.chmod(0o600)
-        except OSError:
-            pass
-        print(f"Ключ відновлення записано у {recovery_file}")
-        print("ВАЖЛИВО: перенесіть його на окремий захищений носій і видаліть локальну копію.")
+        deliver_recovery_key(recovery_key, project_root)
 
     print("Налаштування завершено.")

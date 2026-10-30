@@ -15,6 +15,7 @@ from services.audio.backends import primary_settings, FasterWhisperBackend
 from services.audio.pcm_capture import AcousticEndpoint, CapturedAudio
 from services.audio.whisper import WhisperRecognizer
 from testing.probes.stt_benchmark import scores, aggregate
+from tests.platform_fixtures import hermetic_sounddevice, requires_package
 
 
 class AudioBackendTests(unittest.TestCase):
@@ -49,6 +50,7 @@ class AudioBackendTests(unittest.TestCase):
         self.assertFalse(result.capture_truncated)
         listener.vosk_backend.transcribe.assert_not_called()
 
+    @hermetic_sounddevice
     def test_unrestricted_capture_never_constructs_vosk(self):
         listener = self.listener()
         listener._input_candidates = Mock(return_value=[(None, 16000)])
@@ -136,6 +138,7 @@ class AudioBackendTests(unittest.TestCase):
         self.assertFalse(result.recognition_unreliable)
         self.assertTrue(result.fragmented)
 
+    @patch.object(WhisperRecognizer, "package_available", True)
     def test_transcribe_forces_uk_task_and_preserves_hints(self):
         self.settings.stt_whisper_prompt = 'Українська мова.'
         self.settings.stt_whisper_hotwords = 'Raven'
@@ -150,6 +153,7 @@ class AudioBackendTests(unittest.TestCase):
         self.assertEqual(kwargs['hotwords'], 'Raven')
         self.assertEqual(kwargs['initial_prompt'], 'Українська мова.')
 
+    @requires_package("faster_whisper")
     def test_cuda_load_failure_uses_same_model_cpu(self):
         self.settings.stt_profile = 'quality'
         self.settings.stt_primary_device = 'cuda'
@@ -163,6 +167,7 @@ class AudioBackendTests(unittest.TestCase):
         self.assertEqual(recognizer.actual_device, 'cpu')
         self.assertEqual(recognizer.actual_compute_type, 'int8')
 
+    @requires_package("faster_whisper")
     def test_cpu_auto_selection(self):
         recognizer = WhisperRecognizer(primary_settings(self.settings))
         with patch('ctranslate2.get_cuda_device_count', return_value=0), \

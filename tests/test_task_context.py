@@ -147,7 +147,9 @@ class TaskContextTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TaskIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_real_router_search_then_second_choice_without_llm(self):
+    # files skill manifest is Windows-only; simulate only the router platform filter.
+    @patch("core.command_router.platform.system", return_value="Windows")
+    async def test_real_router_search_then_second_choice_without_llm(self, _system):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in ("диплом-1.txt", "диплом-2.txt"):

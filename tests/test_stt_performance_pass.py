@@ -177,6 +177,7 @@ class STTPerformancePassTests(unittest.TestCase):
         result = listener._recognize_capture(CapturedAudio(b'', 16000, False, False, 1, None))
         self.assertEqual(result.text, '')
 
+    @patch.object(WhisperRecognizer, "package_available", True)
     def test_inference_timer_excludes_model_load_and_records_warm_state(self):
         stt = self.recognizer()
         stt.settings.stt_whisper_escalation_model = ''

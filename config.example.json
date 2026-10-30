@@ -89,11 +89,12 @@
   "security": {
     "dynamic_code_enabled": false,
     "pentest": {
-      "enabled": true,
+      "enabled": false,
       "max_hosts": 256,
       "connect_timeout_seconds": 1.0,
       "scan_timeout_seconds": 180.0,
-      "concurrency": 100
+      "concurrency": 100,
+      "allowed_targets": []
     }
   },
   "updates": {

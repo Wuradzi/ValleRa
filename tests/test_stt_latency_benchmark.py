@@ -9,6 +9,7 @@ from config import Settings, ProjectPaths
 from services.audio.backends import FasterWhisperBackend, primary_settings
 from testing.probes.moonshine_candidate import MoonshineCandidate
 from testing.probes.stt_benchmark import read_matrix
+from services.audio.whisper import WhisperRecognizer
 
 
 class LatencyBenchmarkTests(TestCase):
@@ -20,6 +21,7 @@ class LatencyBenchmarkTests(TestCase):
         self.assertFalse(matrix[2]['word_timestamps'])
         self.assertNotIn('single_pass', matrix[2])
 
+    @patch.object(WhisperRecognizer, "package_available", True)
     def test_runtime_defaults_unchanged_benchmark_options_explicit(self):
         settings = Settings(ProjectPaths.from_root(Path.cwd()))
         backend = FasterWhisperBackend(primary_settings(settings), process=False)

@@ -1134,6 +1134,8 @@ class RecordingChecks(unittest.TestCase):
                 validate_config(config)
 
     def test_vosk_first_live_path_skips_chat_but_checks_command_prefix(self):
+        from tests.platform_fixtures import sounddevice_or_stub
+        self.enterContext(sounddevice_or_stub())
         from config import Settings, ProjectPaths
         from core.listen import VoskListener
         from core.models import RecognitionResult
@@ -1400,6 +1402,8 @@ class PcmChecks(unittest.TestCase):
         self.assertEqual(self.speaker.glow_state()['source'], 'pcm')
 
     def test_tts_deadline_applies_even_with_continuous_telemetry(self):
+        from tests.platform_fixtures import with_tts_capable_platform
+        with_tts_capable_platform(self.speaker)
         from types import SimpleNamespace
         from unittest.mock import Mock
         self.speaker._tts_process = SimpleNamespace(stdin=io.StringIO(), poll=lambda: None)
@@ -1411,6 +1415,8 @@ class PcmChecks(unittest.TestCase):
         stop.assert_called_once()
 
     def test_intentional_stop_during_response_wait_is_not_worker_failure(self):
+        from tests.platform_fixtures import with_tts_capable_platform
+        with_tts_capable_platform(self.speaker)
         import queue
         from types import SimpleNamespace
         def stopped_get(**kwargs):
@@ -1465,7 +1471,8 @@ class DialogueChecks(unittest.IsolatedAsyncioTestCase):
         from core.speak import Speaker
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        return Speaker(Settings(ProjectPaths.from_root(Path(tmp.name))))
+        from tests.platform_fixtures import with_tts_capable_platform
+        return with_tts_capable_platform(Speaker(Settings(ProjectPaths.from_root(Path(tmp.name)))))
 
     def processor(self, speaker=None):
         from types import SimpleNamespace
@@ -3021,6 +3028,11 @@ class WebAnswerChecks(unittest.IsolatedAsyncioTestCase):
             release.assert_awaited_once()
 
 
+# Launch/window evidence uses Windows APIs; parsing and policy checks run everywhere.
+WORKPLACE_WINDOWS_ONLY = unittest.skipUnless(
+    sys.platform == "win32", "робоче місце реалізоване лише для Windows (skills/workplace/manifest.json)")
+
+
 class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
     """Offline workplace checks: no actual program launch, user index, or API."""
 
@@ -3050,6 +3062,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_saved_list_checks_windows_without_duplicate_launch(self):
         result = await self.agent.run("підготуй робоче місце.", self.context)
         self.assertTrue(result.data["success"])
@@ -3058,6 +3071,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         self.launch.assert_not_called()
         self.assertFalse(self.agent.busy)
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_short_work_mode_aliases_use_saved_profile_and_confirmation(self):
         for command in ("режим робота", "Режим «Робота».", "увімкни режим робота", "активуй режим робота", "ввімкни режим робота"):
             with self.subTest(command=command):
@@ -3069,6 +3083,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.context.services["state"]["mode"], "chat")
         self.launch.assert_not_called()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_short_work_mode_refusal_prevents_launch(self):
         self.context.confirm.return_value = False
         result = await self.agent.run("режим робота", self.context)
@@ -3077,6 +3092,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         self.launch.assert_not_called()
         self.evidence.assert_not_awaited()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_workplace_speech_omits_paths_but_confirmation_keeps_them(self):
         from core.confirmation import ConfirmationPrompt
         await self.agent.run("режим робота", self.context)
@@ -3087,6 +3103,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         for name in ("браузер", "VS Code", "Telegram"):
             self.assertIn(name, prompt.spoken)
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_retry_uses_only_unverified_steps_with_new_confirmation(self):
         self.evidence.side_effect = [{"process": True, "window": True}, {"process": True, "window": False}]
         from unittest.mock import AsyncMock
@@ -3110,6 +3127,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         await self.agent.followup("повтори невдалий крок", self.context)
         self.launch.assert_not_called()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_task_status_is_read_only_and_expired_retry_does_nothing(self):
         await self.agent.run("режим робота", self.context)
         self.resolve.reset_mock()
@@ -3152,6 +3170,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
             await processor.process(text, self.context.confirm, source)
             self.assertEqual(processor.router.route.await_args.args[2], {"workplace"})
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_plan_is_complete_before_approval_and_launch(self):
         async def approve(prompt):
             self.assertEqual(self.resolve.call_count, 3)
@@ -3169,6 +3188,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("shell", call.kwargs)
             self.assertIn("env", call.kwargs)
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_refusal_never_launches(self):
         self.context.confirm.return_value = False
         result = await self.agent.run("підготуй робоче місце", self.context)
@@ -3177,6 +3197,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         self.launch.assert_not_called()
         self.evidence.assert_not_awaited()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_unknown_last_app_prevents_all_launches(self):
         self.resolve.side_effect = [dict(name="one", path="one.exe"), dict(name="two", path="two.exe"), ValueError("Не знайдено")]
         await self.agent.run("підготуй робоче місце", self.context)
@@ -3184,6 +3205,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         self.context.confirm.assert_not_awaited()
         self.launch.assert_not_called()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_process_without_window_stops_and_does_not_relaunch(self):
         self.evidence.return_value = {"process": True, "window": False}
         result = await self.agent.run("підготуй робоче місце", self.context)
@@ -3192,18 +3214,21 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.agent.current["steps"][1]["status"], "skipped")
         self.launch.assert_not_called()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_launched_but_unverified_is_partial_no_retry(self):
         self.evidence.return_value = {"process": False, "window": False}
         await self.agent.run("підготуй робоче місце", self.context)
         self.assertEqual(self.agent.current["status"], "partial")
         self.launch.assert_called_once()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_explicit_list_is_one_run_not_profile_change(self):
         before = self.profile.read_bytes()
         await self.agent.run("підготуй робоче місце: Editor", self.context)
         self.assertEqual(self.agent.current["steps"][0]["name"], "Editor")
         self.assertEqual(self.profile.read_bytes(), before)
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_configure_confirmation_and_persistence_without_launch(self):
         result = await self.agent.run("налаштуй робоче місце: Editor, Telegram", self.context)
         self.assertEqual(result.data["command_type"], "workplace_configured")
@@ -3230,6 +3255,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         self.context.confirm.assert_not_awaited()
         self.launch.assert_not_called()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_changed_target_after_approval_stops(self):
         calls = 0
         def resolve(name):
@@ -3248,6 +3274,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         self.context.confirm.assert_not_awaited()
         self.launch.assert_not_called()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_cancellation_while_approval_is_pending(self):
         started = asyncio.Event()
         async def approval(_):
@@ -3262,6 +3289,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.agent.current["status"], "cancelled")
         self.launch.assert_not_called()
 
+    @WORKPLACE_WINDOWS_ONLY
     async def test_cancellation_after_launch_stops_remaining_steps(self):
         self.evidence.return_value = {"process": False, "window": False}
         from unittest.mock import Mock
@@ -3295,6 +3323,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
                 agent._resolve("код.exe --anything")
             self.assertEqual(target.call_count, 3)
 
+    @WORKPLACE_WINDOWS_ONLY
     def test_window_evidence_filters_by_pid_and_visibility(self):
         from types import SimpleNamespace
         from services.apps.workplace_windows import application_evidence
@@ -3319,6 +3348,7 @@ class WorkplaceChecks(unittest.IsolatedAsyncioTestCase):
         with patch.object(agent, "_target", side_effect=[ValueError("bad shortcut"), {"path": "Code.exe", "name": "VS Code"}]):
             self.assertEqual(agent._resolve("VS Code")["path"], "Code.exe")
 
+    @WORKPLACE_WINDOWS_ONLY
     def test_browser_system_picker_is_never_a_browser(self):
         from unittest.mock import Mock
         from services.apps.workplace_windows import default_browser_executable
@@ -3628,6 +3658,8 @@ class NaturalTurnChecks(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.response, 'Розкажіть більше.')
 
     async def test_final_complete_stt_command_uses_normal_confirmation(self):
+        from tests.platform_fixtures import sounddevice_or_stub
+        self.enterContext(sounddevice_or_stub())
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, Mock
         from core.listen import VoskListener

@@ -14,6 +14,7 @@ from skills.apps import skill as apps_skill
 from skills.conversation import skill as conversation_skill
 from skills.help import skill as help_skill
 from skills.web import skill as web_skill
+from tests.platform_fixtures import windows_shell_platform
 
 
 class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -851,6 +852,7 @@ class SkillIntentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(controller.find("телеграм")[0]["score"], 100)
         self.assertEqual(controller.find("телеграму")[0]["name"], "Telegram Desktop")
 
+    @patch("services.apps.controller.resolve_platform", new=windows_shell_platform())
     def test_default_browser_uses_https_url_not_about_protocol(self):
         with patch(
             "services.apps.controller.webbrowser.open_new_tab",

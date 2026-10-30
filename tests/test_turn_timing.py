@@ -15,6 +15,7 @@ from core.models import RecognitionResult
 from core.performance import CURRENT_TURN, PerformanceRecorder, TurnTiming, mark_turn
 from core.speak import Speaker
 from testing.probes.performance import summarize_turns
+from tests.platform_fixtures import hermetic_sounddevice, with_tts_capable_platform
 
 
 class TurnTests(unittest.TestCase):
@@ -81,6 +82,7 @@ class TurnTests(unittest.TestCase):
         self.assertAlmostEqual(result.timing.speech_end_at, 10.35)
         self.assertEqual(result.timing.endpoint_at, 10.5)
 
+    @hermetic_sounddevice
     def test_whisper_replacement_preserves_parent_turn(self):
         listener = VoskListener(self.settings)
         listener.performance = PerformanceRecorder(enabled=False)
@@ -95,7 +97,7 @@ class TurnTests(unittest.TestCase):
 
     def test_file_synthesis_does_not_claim_playback(self):
         import queue
-        speaker = Speaker(self.settings)
+        speaker = with_tts_capable_platform(Speaker(self.settings))
         speaker._tts_process = Mock(stdin=io.StringIO(), poll=Mock(return_value=None))
         speaker._tts_responses = queue.Queue()
         speaker._tts_responses.put({"event": "speak_call"})
@@ -108,7 +110,7 @@ class TurnTests(unittest.TestCase):
 class AsyncTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_tts_worker_carries_queue_context_and_does_not_leak_to_reminders(self):
         with tempfile.TemporaryDirectory() as directory:
-            speaker = Speaker(Settings(ProjectPaths.from_root(Path(directory))))
+            speaker = with_tts_capable_platform(Speaker(Settings(ProjectPaths.from_root(Path(directory)))))
             turn = Mock()
             seen = []
             speaker._speak_sync = lambda _: seen.append(speaker._current_timing)

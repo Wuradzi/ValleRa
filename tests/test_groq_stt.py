@@ -15,6 +15,7 @@ from services.audio.backends import create_backend
 from services.audio.capabilities import Capabilities
 from services.audio.profiles import resolve_profile
 from services.audio.groq_backend import GroqBackend, ENDPOINT
+from tests.platform_fixtures import hermetic_sounddevice
 
 
 class GroqSTTTests(unittest.TestCase):
@@ -55,6 +56,7 @@ class GroqSTTTests(unittest.TestCase):
         self.assertEqual(listener.prepare(), (True, 'ready'))
         listener.vosk_backend.prepare.assert_not_called()
 
+    @hermetic_sounddevice
     def test_cloud_confirmation_uses_primary_capture_not_vosk(self):
         from core.stt_listener import SpeechListener
         from core.listen import VoskListener

@@ -86,6 +86,7 @@ class RavenApp:
             connect_timeout=settings.pentest_connect_timeout_seconds,
             scan_timeout=settings.pentest_scan_timeout_seconds,
             concurrency=settings.pentest_concurrency,
+            allowed_targets=settings.pentest_allowed_targets,
         )
         app_indexer = ApplicationIndexer(
             settings.paths.data_dir / "applications.json",

@@ -1,5 +1,16 @@
 # Phase 3C — Linux / ARM64 runtime
 
+## Linux CI — recorded 2026-10-30
+
+`.github/workflows/ci.yml` has a second job, `tests-linux` (ubuntu-24.04, Python 3.12,
+`requirements-ci.txt`, `libportaudio2`), next to the Windows job. It runs the same
+offline `tester.py --all --verbose` and `ruff check .`. Offline suite on Linux
+x86_64 is portable: Windows-only workplace launch/window checks are skipped by
+capability, Speaker queue logic runs under a TTS-capable platform value with mocked
+synthesis, and capture tests stub `sounddevice` only when PortAudio is missing
+(`tests/platform_fixtures.py`). This is CI evidence for x86_64, not ARM64/Pi
+hardware validation: Linux TTS stays NOT_IMPLEMENTED and voice turns NOT_VALIDATED.
+
 ## Phase 3C.1 findings — recorded 2026-10-06
 
 User-reported first real Pi run: Core/text, setup/vault, USB microphone

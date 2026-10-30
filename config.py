@@ -109,11 +109,12 @@ class Settings:
     natural_actions_enabled: bool = True
     command_interpretation_timeout_seconds: int = 12
     dynamic_code_enabled: bool = False
-    pentest_enabled: bool = True
+    pentest_enabled: bool = False
     pentest_max_hosts: int = 256
     pentest_connect_timeout_seconds: float = 1.0
     pentest_scan_timeout_seconds: float = 180.0
     pentest_concurrency: int = 100
+    pentest_allowed_targets: tuple[str, ...] = ()
     check_updates: bool = True
     github_repository: str = ""
     log_level: str = "INFO"
@@ -215,11 +216,12 @@ def default_config(*, fresh: bool = True) -> dict[str, Any]:
         "security": {
             "dynamic_code_enabled": False,
             "pentest": {
-                "enabled": True,
+                "enabled": False,
                 "max_hosts": 256,
                 "connect_timeout_seconds": 1.0,
                 "scan_timeout_seconds": 180.0,
                 "concurrency": 100,
+                "allowed_targets": [],
             },
         },
         "commands": {"natural_actions": True, "llm_interpretation": True, "interpretation_timeout_seconds": 12},
@@ -427,6 +429,11 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ConfigError("security.pentest.max_hosts має бути не менше 1")
         if not 1 <= int(config["security"]["pentest"]["concurrency"]) <= 1000:
             raise ConfigError("security.pentest.concurrency має бути від 1 до 1000")
+        from services.pentest.scope import ScopeError, TargetAllowlist
+        try:
+            TargetAllowlist.parse(config["security"]["pentest"]["allowed_targets"])
+        except ScopeError as exc:
+            raise ConfigError(f"security.pentest.allowed_targets: {exc}") from exc
         supported = {"gemini", "groq", "openai", "anthropic", "ollama"}
         order = list(config["llm"]["order"])
         unknown = [name for name in order if name not in supported]
@@ -560,6 +567,7 @@ def load_settings(profile_override: str | None = None, *, read_only=False, root=
             config["security"]["pentest"]["scan_timeout_seconds"]
         ),
         pentest_concurrency=int(config["security"]["pentest"]["concurrency"]),
+        pentest_allowed_targets=tuple(config["security"]["pentest"]["allowed_targets"]),
         check_updates=bool(config["updates"]["check"]),
         github_repository=config["updates"]["github_repository"],
         log_level=config["logging"]["level"],

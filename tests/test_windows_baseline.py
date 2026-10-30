@@ -11,6 +11,7 @@ from services.health.probes import tts_self_test, audio_inventory
 from services.health.bundle import collect, BUNDLE_FILES
 from services.audio.windows_speech import synthesize_windows, SPEECH_FUNCTIONS
 from tests import test_health_qol as health_fixtures
+from tests.platform_fixtures import hermetic_sounddevice
 
 
 class WindowsBaselineTests(unittest.TestCase):
@@ -55,6 +56,7 @@ class WindowsBaselineTests(unittest.TestCase):
         with patch('services.platform.resolver.platform.system', return_value='Linux'):
             self.assertEqual(tts_self_test(self.settings)['status'], 'NOT_AVAILABLE')
 
+    @hermetic_sounddevice
     def test_playback_absent_does_not_fail_synthesis(self):
         with patch('sounddevice.query_devices', side_effect=RuntimeError('no device')):
             output = audio_inventory(self.settings)[1]

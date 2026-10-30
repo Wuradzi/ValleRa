@@ -16,6 +16,7 @@ from core.models import RecognitionResult
 from services.audio.whisper import WhisperRecognizer
 from services.audio.refinement import RefinementWait
 from config import Settings, ProjectPaths
+from tests.platform_fixtures import hermetic_sounddevice
 
 
 class HybridRecognitionTests(unittest.TestCase):
@@ -153,6 +154,7 @@ class SelectiveRefinementTests(unittest.TestCase):
     def capture(self, text, confidence=.96, **flags):
         self.listener._listen_on_device = Mock(return_value=(RecognitionResult(text, confidence, **flags), self.pcm))
 
+    @hermetic_sounddevice
     def test_confident_chat_fast_path_and_low_confidence_refinement(self):
         self.capture('Сьогодні був цікавий день')
         self.assertEqual(self.listener.listen_once().engine, 'vosk')
@@ -168,6 +170,7 @@ class SelectiveRefinementTests(unittest.TestCase):
             with self.subTest(text=text, flags=flags):
                 self.assertTrue(self.listener._should_refine(RecognitionResult(text, .99, **flags), self.pcm, 16000)[0])
 
+    @hermetic_sounddevice
     def test_confirmation_and_scoped_reply_do_not_require_whisper(self):
         for text in ('так', 'ні', 'гаразд'):
             self.capture(text)
@@ -193,6 +196,7 @@ class SelectiveRefinementTests(unittest.TestCase):
         pending['expires'] = 0
         self.assertFalse(processor.stt_scoped_reply('Telegram'))
 
+    @hermetic_sounddevice
     def test_empty_or_unreliable_refinement_never_authorizes_action(self):
         for refined in (RecognitionResult('', 0, 'whisper'), RecognitionResult('відкрий Telegram', .2, 'whisper')):
             self.capture('відкрий Telegram', .7)
@@ -203,6 +207,7 @@ class SelectiveRefinementTests(unittest.TestCase):
             self.assertTrue(result.recognition_unreliable)
             self.assertFalse(result.utterance_incomplete)  # Complete words, but repeat required for safety.
 
+    @hermetic_sounddevice
     def test_timeout_chat_fallback_and_action_repeat(self):
         self.listener.settings.stt_whisper_soft_budget_ms = 10
         self.listener.settings.stt_whisper_hard_budget_ms = 40
@@ -250,6 +255,7 @@ class SelectiveRefinementTests(unittest.TestCase):
             release.set()
             self.assertTrue(waiter._active.wait(1))
 
+    @hermetic_sounddevice
     def test_interruption_ignores_pending_refinement(self):
         def transcribe(*args):
             self.listener.interrupt()

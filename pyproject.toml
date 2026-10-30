@@ -10,6 +10,11 @@ exclude = [".venv", "models", "data", "cache", "logs"]
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
 
+[tool.ruff.lint.mccabe]
+# Ratchet threshold for C901; enforced by tests/test_complexity_budget.py
+# against testing/complexity_baseline.json, not by the global select above.
+max-complexity = 10
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
