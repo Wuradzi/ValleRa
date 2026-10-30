@@ -4,7 +4,7 @@
     "command_prefix": "COMMAND_PREFIX.match(text) — режим «Команда»",
     "stop": "STOP_SPEECH.fullmatch(text) — зупинка мовлення",
     "control": "DIALOGUE_CONTROLS за нормалізованим текстом: continue/repeat/shorter/simpler або null",
-    "direct": "direct_request(request, '') — прямий запит до асистента, не оповідь/заперечення/цитата",
+    "direct": "direct_request(final_request(request), '') — прямий запит до асистента, не оповідь/заперечення/цитата; розмовний вступ перед запитом не блокує його",
     "scope": "request_scope(request): open_app/find_files/weather/window_control або null",
     "window": "window_request(request): [action, name] або null",
     "needs_proposal": "голе посилання без власника (needs_proposal)",
@@ -12,7 +12,8 @@
     "app_name": "application_name_reply(text): назва програми або null",
     "confirm": "ConfirmationService._decision(text): yes/no/unknown (UI/текст, без confidence)",
     "confirm_voice_low": "те саме з голосовою confidence 0.7: так → unknown, ні → no",
-    "memory": "parse_request(text): [операція, вміст] або null"
+    "memory": "parse_request(text): [операція, вміст] або null",
+    "query": "search_query(final_request(request)): слова користувача для вебпошуку"
   },
   "phrases": [
     {"id": "stop_plain", "category": "stop", "source": "voice", "text": "стоп", "expect": {"stop": true, "direct": false}},
@@ -56,6 +57,11 @@
     {"id": "weather", "category": "action_request", "source": "voice", "text": "Яка погода в Луцьку завтра?", "expect": {"direct": true, "scope": "weather"}},
     {"id": "workplace", "category": "action_request", "source": "voice", "text": "Підготуй робоче місце", "expect": {"direct": true}},
 
+    {"id": "lead_in_search", "category": "action_request", "source": "voice", "text": "Щоб тобі таке сказати, я навіть не знаю. Знайди мені інформацію про ресорджементо.", "expect": {"direct": true, "query": "ресорджементо"}, "note": "Жива сесія 30.10.2026: заперечення у вступі раніше блокувало прямий запит."},
+    {"id": "lead_in_greeting", "category": "action_request", "source": "voice", "text": "Привіт. Відкрий браузер.", "expect": {"direct": true, "scope": "open_app"}},
+    {"id": "search_info_phrase", "category": "action_request", "source": "voice", "text": "Знайди інформацію про ресорджменту.", "expect": {"direct": true, "query": "ресорджменту"}, "note": "Без «інформацію про» і крапки; написання STT не виправляється моделлю."},
+    {"id": "search_plain_words", "category": "action_request", "source": "voice", "text": "Знайди рецепт без цукру", "expect": {"query": "рецепт без цукру"}},
+
     {"id": "window_maximize", "category": "window", "source": "voice", "text": "Розгорни вікно Telegram", "expect": {"direct": true, "scope": "window_control", "window": ["maximize", "Telegram"]}},
     {"id": "window_minimize_bare", "category": "window", "source": "voice", "text": "Згорни", "expect": {"window": ["minimize", ""]}},
     {"id": "window_restore", "category": "window", "source": "voice", "text": "Віднови програму браузер", "expect": {"window": ["restore", "браузер"]}},
@@ -64,6 +70,7 @@
     {"id": "negation", "category": "non_action", "source": "voice", "text": "Не відкривай браузер. Я лише запитую, чи ти вмієш це робити.", "expect": {"direct": false, "scope": null}},
     {"id": "negation_short", "category": "non_action", "source": "voice", "text": "Не відкривай браузер", "expect": {"direct": false}},
     {"id": "conditional", "category": "non_action", "source": "voice", "text": "Якщо буде час, відкрий браузер", "expect": {"direct": false}},
+    {"id": "negated_lead_in", "category": "non_action", "source": "voice", "text": "Не відкривай браузер. Відкрий блокнот.", "expect": {"direct": false}, "note": "Дієслово дії у вступі зберігає всю репліку для gate (fail closed)."},
     {"id": "reported_speech", "category": "non_action", "source": "voice", "text": "Він сказав відкрий браузер", "expect": {"direct": false}},
     {"id": "quoted", "category": "non_action", "source": "text", "text": "Відкрий «браузер»", "expect": {"direct": false}},
     {"id": "translate", "category": "non_action", "source": "voice", "text": "Переклади відкрий браузер англійською", "expect": {"direct": false}},

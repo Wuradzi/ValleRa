@@ -5,9 +5,10 @@ from pathlib import Path
 
 from core.action_proposal import needs_proposal
 from core.confirmation import ConfirmationService
-from core.natural_turn import (application_name_reply, direct_request, request_scope,
+from core.natural_turn import (application_name_reply, direct_request, final_request, request_scope,
                                short_clarification, voice_request, window_request)
 from core.processor import COMMAND_PREFIX, DIALOGUE_CONTROLS, STOP_SPEECH, CommandProcessor
+from services.web.intents import search_query
 from skills.memory.personal import parse_request
 
 CORPUS = Path(__file__).resolve().parents[1] / "testing" / "phrase_corpus.json"
@@ -17,8 +18,9 @@ DECISION = {True: "yes", False: "no", None: "unknown"}
 
 
 def _request(phrase):
+    """The request the processor gates on: voice repair, then the final sentence."""
     text = phrase["text"]
-    return voice_request(text) if phrase["source"] == "voice" else text
+    return final_request(voice_request(text) if phrase["source"] == "voice" else text)
 
 
 def _window(phrase):
@@ -44,6 +46,7 @@ FIELDS = {
     "confirm": lambda p: DECISION[ConfirmationService._decision(p["text"])],
     "confirm_voice_low": lambda p: DECISION[ConfirmationService._decision(p["text"], 0.7)],
     "memory": _memory,
+    "query": lambda p: search_query(_request(p)),
 }
 
 

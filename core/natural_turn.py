@@ -274,6 +274,35 @@ def direct_request(text, tool):
                          r"статус завдання|що вдалося|що з робочим місцем|погода|яка погода|прогноз погоди)\b", value))
 
 
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?…])\s+")
+_LEAD_ACTION_WORD = re.compile(
+    r"\b(?:відкр|запуст|знайд|знайт|пошук|шука|розгорн|згорн|віднов|видал|закр|увімкн|ввімкн|"
+    r"вимкн|включ|підготу|повтор)\w*", re.I)
+_LEAD_FRAMING = re.compile(
+    r"\b(?:якщо|коли|як тільки|уяви|сказав|сказала|написав|написала|цитата|приклад|переклади)\b", re.I)
+
+
+def final_request(text):
+    """Last sentence as the request when the lead-in is only conversational.
+
+    «Не знаю, що тобі сказати. Знайди …»: the lead's own negation must not block a
+    separate direct request. Any action word, condition, reported speech, quote or
+    sensitive data in the lead keeps the whole text (fail closed). The result is only
+    an input to the same direct gate and confirmation, never a permission by itself.
+    """
+    if not isinstance(text, str):
+        return text
+    parts = [part for part in _SENTENCE_BREAK.split(text.strip()) if part]
+    if len(parts) < 2:
+        return text
+    lead, last = " ".join(parts[:-1]), parts[-1]
+    if (_LEAD_ACTION_WORD.search(lead) or _LEAD_FRAMING.search(lead) or SENSITIVE_REQUEST.search(lead)
+            or redact_user_text(lead) != lead or any(char in lead for char in '"«»“”`')
+            or not direct_request(last, "")):
+        return text
+    return last
+
+
 def asks_to_open(text):
     return direct_request(text, "open_app") and bool(re.search(r"\b(?:відкрий|відкрій|відкрити|відкрей|відкрив|відкрила|запусти|запустити|запустив|запустила)\b", text, re.I))
 

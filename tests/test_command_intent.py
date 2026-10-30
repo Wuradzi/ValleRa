@@ -119,9 +119,10 @@ class ContextualProposalTests(unittest.IsolatedAsyncioTestCase):
                        return_value=SkillResult(True, 'fixture', {'success': True})) as search:
                 await self.turn('Знайди в інтернеті реставрацію Meiji.')
             self.confirm.assert_awaited_once()
-            self.assertIn('реставрацію Meiji.', str(self.confirm.await_args))
+            # Sentence-final punctuation is not part of the query (live session 30.10.2026).
+            self.assertIn('«реставрацію Meiji»', str(self.confirm.await_args))
             if accepted:
-                search.assert_awaited_once_with('реставрацію Meiji.', self.services)
+                search.assert_awaited_once_with('реставрацію Meiji', self.services)
             else:
                 search.assert_not_awaited()
 
@@ -434,7 +435,8 @@ class IntentValidationTests(unittest.TestCase):
         from core.command_intent import original_search_intent, preserves_search_intent
         candidate = CommandIntent('web_search', {'query': 'інша тема'})
         for request, query in (
-            ('Знайди в інтернеті реставрацію Meiji.', 'реставрацію Meiji.'),
+            ('Знайди в інтернеті реставрацію Meiji.', 'реставрацію Meiji'),
+            ('Знайди версію Foo-Bar 2.0.', 'версію Foo-Bar 2.0'),
             ('Знайди C++ API у браузері', 'C++ API'),
             ('Пошукай тільки безкоштовні API, не платні, 2026',
              'тільки безкоштовні API, не платні, 2026'),

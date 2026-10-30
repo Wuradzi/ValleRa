@@ -34,7 +34,7 @@ GROUPS = {
     "llm": ("Моделі, контекст, помилки та резервування", (
         "llm_*", "gemini_provider", "empty_response_retry", "conversation_context", "streaming")),
     "commands": ("Команди, маршрутизація, підтвердження", (
-        "interaction", "router", "skill_loader", "command_intent", "task_context", "phrase_corpus")),
+        "interaction", "router", "skill_loader", "command_intent", "task_context", "phrase_corpus", "dialogue_context")),
     "files": ("Файли та вибір результату", ("task_context",)),
     "storage": ("Пам'ять, нагадування та сховище", (
         "atomic_json", "memory_store", "reminder_store", "secret_store")),

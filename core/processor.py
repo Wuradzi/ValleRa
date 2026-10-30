@@ -13,7 +13,8 @@ from core.action_proposal import ReplyKind, proposal_question, needs_proposal
 from core.command_actions import execute_intent
 from core.command_intent import CommandIntent, InterpretationUnavailable, MULTI_ACTION, can_interpret, original_search_intent, preserves_search_intent
 from core.command_catalog import chat_catalog, local_intent_candidates
-from core.natural_turn import direct_request, application_name_reply, request_scope, short_clarification, voice_request, window_request
+from core.natural_turn import (direct_request, application_name_reply, final_request, request_scope,
+                               short_clarification, voice_request, window_request)
 from core.local_action_resolver import resolve_exact_app
 from core.performance import DISABLED_PERFORMANCE
 from core.speech_text import SpeechBuffer
@@ -611,7 +612,9 @@ class CommandProcessor:
                             proposal_generation=None, session_id=None, proposal_quality=True):
         pending = self._natural_pending
         self._natural_pending = None  # Consume once; later chat must not replay an old request.
-        request = voice_request(text) if context.source == "voice" else text
+        full_request = voice_request(text) if context.source == "voice" else text
+        # Gates see the direct request after a conversational lead-in; the model sees all.
+        request = final_request(full_request)
         pending, scoped = self._scope_pending(pending, text, request)
         if self._needs_proposal_clarification(text, scoped, proposal_lease):
             return SkillResult(True, 'Уточніть, будь ласка, що саме потрібно зробити.',
@@ -619,12 +622,13 @@ class CommandProcessor:
         result = await self._natural_window(text, request, pending, scoped, context)
         if result is not None:
             return result
-        model_text = self._natural_model_text(text, request, pending, scoped)
+        model_text = self._natural_model_text(text, full_request, pending, scoped)
         result = await self._natural_local_shortcut(request, scoped, context)
         if result is not None:
             return result
         buffer = SpeechBuffer()
         spoken = []
+        assistant_offer = self._assistant_offer(proposal_lease)
         self._last_question = text[:2000]
         self._cache_reply("")
         self._reply_interrupted = True
@@ -659,16 +663,16 @@ class CommandProcessor:
             return await self._natural_proposal(turn, text, context, scoped, proposal_lease,
                                                 proposal_generation, session_id, proposal_quality)
         return await self._natural_decision(turn, text, request, model_text, pending, scoped, context,
-                                            emit, buffer, spoken)
+                                            emit, buffer, spoken, assistant_offer)
 
     async def _natural_decision(self, turn, text, request, model_text, pending, scoped, context,
-                                emit, buffer, spoken):
+                                emit, buffer, spoken, assistant_offer=None):
         """ACTION goes through policy; CHAT/CLARIFY only speak and may keep a scoped question."""
         turn = DialogueDecision.from_natural(turn, context.turn_id)
         logger.info("Natural decision kind=%s tool=%s scoped=%s", turn.kind.value,
                     turn.intent.tool if turn.intent is not None else None, scoped)
         if turn.kind == "action":
-            return await self._natural_action(turn, request, text, pending, scoped, context)
+            return await self._natural_action(turn, request, text, pending, scoped, context, assistant_offer)
         if turn.kind == 'unavailable' and spoken:
             # Preserve partial speech, surface failure, and never rewrite older history.
             await emit([turn.response])
@@ -773,15 +777,27 @@ class CommandProcessor:
             return result
         return None
 
-    async def _natural_action(self, turn, request, text, pending, scoped, context):
+    def _assistant_offer(self, proposal_lease):
+        """Raven's previous reply, which may have offered a next action in plain CHAT.
+
+        A live structured proposal is resolved through FOLLOWUP instead.
+        """
+        if self.dialogue_state.proposals.current(proposal_lease):
+            return None
+        return self._last_reply or None
+
+    async def _natural_action(self, turn, request, text, pending, scoped, context, assistant_offer=None):
         self._reply_interrupted = False
-        permission = natural_action_permission(turn, request, text, pending, scoped)
+        permission = natural_action_permission(turn, request, text, pending, scoped,
+                                               assistant_offer=assistant_offer)
         if permission.outcome is not PolicyOutcome.ALLOW:
             return SkillResult(True, permission.response,
                                {"command_type": "intent_clarification", "success": False})
         intent = permission.intent
         result = await asyncio.wait_for(execute_intent(intent, context), timeout=120)
         result.data["natural_action"] = True
+        if permission.route != "direct":
+            result.data["intent_route"] = permission.route
         self._reply_interrupted = False
         return result
 

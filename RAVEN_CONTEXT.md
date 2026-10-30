@@ -7,8 +7,8 @@
 ## Передача роботи — сесії Claude 29–30.10.2026
 
 Перед будь-якою задачею: `git status --short` і `git diff --stat`. Аудит 29.10.2026
-№1–№4 закомічено (`a52503d`, без push). №5, №6, №7 і залишок №3 — у робочому
-каталозі без commit. Commit/push — лише за явним дорученням користувача,
+закомічено (`a52503d`, `b315540`, без push). J131 (контекстне розуміння після живого
+тесту) — у робочому каталозі без commit. Commit/push — лише за явним дорученням користувача,
 з переглядом staged-файлів (не `git add .`).
 
 | Запис | Пункт аудиту | Суть |
@@ -19,9 +19,10 @@
 | J127 | №5, №3 | `docs/DEVELOPMENT_RULES.md` (публічний шаблон журналу), allowlist + BEHAVIORAL_CONTRACTS; `validate_config`, `_conversation_turn`, `_natural_turn` ≤ 10 |
 | J128 | №6 | «забудь»/очищення пам'яті видаляє `memory.json.bakN` |
 | J129 | №6 | `core/log_retention.py`: ротація logs/sessions (30) і logs/tests (50), ≥7 днів, докази захищено |
-| J130 | №7 | `testing/phrase_corpus.json` + `tests/test_phrase_corpus.py` (65 фраз) |
+| J130 | №7 | `testing/phrase_corpus.json` + `tests/test_phrase_corpus.py` (65 → 70 фраз) |
+| J131 | живий тест | `final_request` (вступ перед запитом), чистий `search_query`, «так» на пропозицію Raven (`assistant_offer`) |
 
-Останній прогін 30.10.2026 (Windows): tester --all 905/904/0 невдалих/1 пропуск (Node),
+Останній прогін 30.10.2026 (Windows, E253): tester --all 915/914/0 невдалих/1 пропуск (Node),
 ruff, храповик (порушень 0), `git diff --check` — успішно.
 
 Відкриті дії користувача / наступної сесії:
@@ -36,6 +37,8 @@ ruff, храповик (порушень 0), `git diff --check` — успішн
    звузити лише за рішенням користувача.
 6. `python -m testing.complexity_budget` у консолі cp1251 падає з UnicodeEncodeError на
    символі «→»; обхід — `PYTHONUTF8=1`.
+7. J131 не перевірено наживо: повторити фрази з E252. Не обрано користувачем: «Так! Так!»
+   у підтвердженні та журналювання кнопкових підтверджень native UI.
 
 Рішення, які не переглядати без користувача:
 

@@ -40,7 +40,12 @@ def search_query(text: str) -> str:
     query = re.sub(r"^(?:пошук\s+в\s+інтернеті|пошукай|знайди|знайти)\b[\s,:-]*", "", text, flags=re.I)
     location = r"(?:в|у)\s+(?:інтернеті|браузері|гуглі|google)"
     query = re.sub(rf"^(?:і\s+)?{location}[\s,:;-]*", "", query, flags=re.I)
+    query = re.sub(r"[\s.!?…]+$", "", query)
     query = re.sub(rf"\s+{location}$", "", query, flags=re.I)
+    # «(мені) (додаткову) інформацію про X» searches for X; the user's own words stay.
+    query = re.sub(r"^(?:мені\s+)?(?:(?:якусь|детальну|докладну|додаткову|більше|всю|усю)\s+)?"
+                   r"(?:інформацію|інформації|відомості)\s+(?:про|щодо|стосовно)\s+(?=\w)",
+                   "", query, flags=re.I)
     return query.strip()
 
 
