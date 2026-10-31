@@ -5,7 +5,8 @@ from dataclasses import dataclass
 import re
 
 from core.command_catalog import intent_catalog, command_help
-from core.command_intent import CommandIntent, InvalidIntent, MULTI_ACTION, SENSITIVE_REQUEST, parse_intent
+from core.command_intent import (CommandIntent, InvalidIntent, MULTI_ACTION, SENSITIVE_REQUEST, parse_intent,
+                                 validate_intent)
 from core.security import redact_user_text
 from core.action_proposal import ProposalReply, parse_reply
 
@@ -32,8 +33,16 @@ CLARIFY\nодне коротке уточнювальне питання
 ACTION\nодин JSON з tool та arguments із каталогу нижче
 PROPOSAL\nодин JSON з tool та arguments із каталогу нижче
 FOLLOWUP\nодин JSON з proposal_id та resolution
-Перший рядок — рівно CHAT, CLARIFY, ACTION, PROPOSAL або FOLLOWUP. Не змішуй формати.
+LOOKUP\nкороткий пошуковий запит одним рядком
+Перший рядок — рівно CHAT, CLARIFY, ACTION, PROPOSAL, FOLLOWUP або LOOKUP. Не змішуй формати.
 CHAT: відповідай природно, зазвичай 1–3 речення; на прохання можна докладніше.
+Не вигадуй фактів. Якщо користувач питає про конкретні факти (людей, події, дати,
+числа, назви, нещодавнє чи нішеве), яких немає у твоїх знаннях або в яких ти не
+впевнений, не відповідай з пам'яті: поверни LOOKUP із коротким пошуковим запитом.
+Локальна система сама скаже, що ти не знаєш напевно, і попросить дозвіл на пошук.
+Якщо назву, ймовірно, спотворило розпізнавання мовлення, пиши в запиті найімовірніше
+правильне написання. Те, що знаєш напевно, пояснюй у CHAT. LOOKUP — лише пошук
+інформації, не локальна дія, не розмова й не думка; у LOOKUP не пиши секретів.
 Коротка відповідь на твоє питання продовжує тему розмови, а не автоматично просить дію.
 Збережені історія та резюме можуть походити з попередніх запусків. Не стверджуй,
 що пам'ятаєш усе або лише поточну сесію. Без явної позначки часу не приписуй
@@ -78,6 +87,21 @@ workplace_status/workplace_retry стосуються лише останньо�
 """ + intent_catalog(enabled)
 
 
+def parse_lookup(body):
+    """One search line for a knowledge gap: data only, the local policy decides."""
+    query = body.strip()
+    if "\n" in query or not 1 <= len(query) <= 200 or re.search(r"[{}\[\]`]", query):
+        raise InvalidIntent("invalid lookup")
+    return validate_intent({"tool": "web_search", "arguments": {"query": query}})
+
+
+_STRUCTURED_TURNS = {
+    "proposal": lambda body: NaturalTurn("proposal", intent=parse_intent(body)),
+    "followup": lambda body: NaturalTurn("followup", proposal_reply=parse_reply(body)),
+    "lookup": lambda body: NaturalTurn("lookup", intent=parse_lookup(body)),
+}
+
+
 class TurnDecoder:
     """Never emit tool JSON; proposals are accepted only after a complete stream."""
     def __init__(self):
@@ -95,13 +119,13 @@ class TurnDecoder:
                     raise InvalidIntent("turn too large")
                 return ""
             header, chunk = self.header.split("\n", 1)
-            if header.rstrip("\r") not in {"CHAT", "CLARIFY", "ACTION", "PROPOSAL", "FOLLOWUP"}:
+            if header.rstrip("\r") not in {"CHAT", "CLARIFY", "ACTION", "PROPOSAL", "FOLLOWUP", "LOOKUP"}:
                 self.kind = "plain"
                 chunk = self.header
             else:
                 self.kind = header.rstrip("\r").lower()
             self.header = ""
-        if len(self.body) + len(chunk) > (4000 if self.kind in {"action", "proposal", "followup"} else 16000):
+        if len(self.body) + len(chunk) > (4000 if self.kind in {"action", "proposal", "followup", "lookup"} else 16000):
             raise InvalidIntent("turn too large")
         self.body += chunk
         return chunk if self.kind in {"chat", "clarify"} else ""
@@ -112,19 +136,18 @@ class TurnDecoder:
             self.header = ""
         if not self.body.strip():
             raise InvalidIntent("empty turn")
-        if self.kind == 'proposal':
-            return NaturalTurn('proposal', intent=parse_intent(self.body))
-        if self.kind == 'followup':
-            return NaturalTurn('followup', proposal_reply=parse_reply(self.body))
+        structured = _STRUCTURED_TURNS.get(self.kind)
+        if structured is not None:
+            return structured(self.body)
         if self.kind == "plain":
             # Inspect the COMPLETE fallback before exposing text. Never run the
             # legacy mixed-output action recovery on a headerless response.
-            if re.search(r"\b(?:CHAT|CLARIFY|ACTION|PROPOSAL|FOLLOWUP|tool|arguments|tool_calls?|function_call)\b|[{}\[\]]|```",
+            if re.search(r"\b(?:CHAT|CLARIFY|ACTION|PROPOSAL|FOLLOWUP|LOOKUP|tool|arguments|tool_calls?|function_call)\b|[{}\[\]]|```",
                          self.body, re.I):
                 raise InvalidIntent("mixed control output")
             return NaturalTurn("chat", safe_dialogue(self.body.strip()))
         if self.kind != "action":
-            if re.search(r'\b(?:PROPOSAL|FOLLOWUP)\b', self.body):
+            if re.search(r'\b(?:PROPOSAL|FOLLOWUP|LOOKUP)\b', self.body):
                 raise InvalidIntent('mixed control output')
             # Recover ONE complete trailing proposal, never execute a prose promise.
             mixed = re.search(r"\bACTION\s*(\{.*\})\s*$", self.body, re.S)
@@ -153,7 +176,7 @@ class ChatPreview:
             return []
         body = decoder.body
         suspicious = re.search(
-            r'\b(?:CHAT|CLARIFY|ACTION|PROPOSAL|FOLLOWUP|tool|arguments|tool_calls?|function_call)\b|[{}\[\]]|```',
+            r'\b(?:CHAT|CLARIFY|ACTION|PROPOSAL|FOLLOWUP|LOOKUP|tool|arguments|tool_calls?|function_call)\b|[{}\[\]]|```',
             body, re.I)
         if suspicious or safe_dialogue(body.strip()) != body.strip():
             if self.emitted:

@@ -8,8 +8,9 @@ from enum import Enum
 import re
 import time
 
-from core.command_intent import (CommandIntent, MULTI_ACTION, SENSITIVE_REQUEST, original_search_intent,
-                                 preserves_search_intent)
+from core.command_intent import (CommandIntent, InvalidIntent, MULTI_ACTION, SENSITIVE_REQUEST,
+                                 original_search_intent, preserves_search_intent, validate_intent)
+from core.security import redact_user_text
 from core.natural_turn import direct_request, application_name_reply, request_scope
 from core.dialogue_decision import DecisionKind
 from core.action_proposal import PendingActionProposal, acceptance_matches, PROPOSABLE
@@ -127,3 +128,47 @@ def natural_action_permission(decision, request, text, pending, scoped, *, actio
         return _permission(decision, PolicyOutcome.CLARIFY, response=
             'Уточніть точний запит пошуку: не можу надійно зберегти його зміст.')
     return _permission(decision, PolicyOutcome.ALLOW, intent)
+
+
+# Knowledge gap: the model has no reliable facts and suggests ONE web search.
+# Only web_search, only for an information request, never with secrets, a
+# refusal of search or several actions. ALLOW still means the executor shows
+# the exact query and asks the correlated confirmation before anything runs.
+KNOWLEDGE_GAP_NOTICE = 'Не знаю цього напевно.'
+_INFORMATION_REQUEST = re.compile(
+    r'\?|\b(?:що|хто|коли|де|чому|навіщо|як|який|яка|яке|які|якого|скільки|чи|розкажи|поясни|опиши|'
+    r'знайди|дізнайся|цікаво|хочу знати)\b', re.I)
+_SEARCH_REFUSAL = re.compile(
+    r'\bне\s+(?:шукай|шукати|пошукай|гугли|треба\s+шукати|потрібно\s+шукати)\b|\bбез\s+(?:пошуку|інтернету)\b', re.I)
+
+
+def _safe_search_text(value):
+    return (isinstance(value, str) and not SENSITIVE_REQUEST.search(value)
+            and redact_user_text(value) == value)
+
+
+def knowledge_gap_permission(decision, text, *, action_eligible=True):
+    """Offer a model-worded web search when the model reports missing facts."""
+    intent = decision.intent
+    if not action_eligible or intent is None or intent.tool != 'web_search':
+        return _permission(decision, PolicyOutcome.SAFE_NO_ACTION)
+    refused = _permission(decision, PolicyOutcome.CLARIFY,
+                          response=KNOWLEDGE_GAP_NOTICE + ' Пошук в інтернеті не запускаю.')
+    try:
+        intent = validate_intent({'tool': intent.tool, 'arguments': intent.arguments})
+    except (InvalidIntent, AttributeError, TypeError):
+        return refused
+    if (not _safe_search_text(text) or not _safe_search_text(intent.arguments['query'])
+            or not _INFORMATION_REQUEST.search(text) or _SEARCH_REFUSAL.search(text)
+            or MULTI_ACTION.search(text)):
+        return refused
+    return _permission(decision, PolicyOutcome.ALLOW, intent, route='knowledge_gap')
+
+
+def knowledge_gap_fallback(permission, decision, request, text, scoped, *, action_eligible=True):
+    """A refused, non-direct ACTION web_search is a knowledge gap, not a dead end."""
+    intent = decision.intent
+    if (permission.outcome is PolicyOutcome.CLARIFY and not scoped and intent is not None
+            and intent.tool == 'web_search' and not direct_request(request, intent.tool)):
+        return knowledge_gap_permission(decision, text, action_eligible=action_eligible)
+    return permission

@@ -13,6 +13,7 @@ class DecisionKind(str, Enum):
     CONTROL = 'control'
     PROPOSAL = 'proposal'
     FOLLOWUP = 'followup'
+    KNOWLEDGE_GAP = 'lookup'  # model lacks the facts; local policy may offer web_search
     UNAVAILABLE = 'unavailable'
 
 

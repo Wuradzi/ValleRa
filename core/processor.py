@@ -8,7 +8,8 @@ import time
 from core.models import CommandContext, SkillResult, TurnEnvelope
 from core.recognition_policy import DialogueState
 from core.dialogue_decision import DialogueDecision, DecisionKind
-from core.action_policy import PolicyOutcome, natural_action_permission
+from core.action_policy import (KNOWLEDGE_GAP_NOTICE, PolicyOutcome, knowledge_gap_fallback,
+                                knowledge_gap_permission, natural_action_permission)
 from core.action_proposal import ReplyKind, proposal_question, needs_proposal
 from core.command_actions import execute_intent
 from core.command_intent import CommandIntent, InterpretationUnavailable, MULTI_ACTION, can_interpret, original_search_intent, preserves_search_intent
@@ -243,6 +244,7 @@ class CommandProcessor:
         # selection. Require a fresh complete request before normal approval.
         prior_clarification = self._natural_pending
         self._natural_pending = None
+        previous_reply = self._last_reply or None
         if self.conversation_paused:
             return SkillResult(True, "", {"command_type": "conversation_paused"})
         lexical_fragment = (input_turn is not None and not input_turn.confidence_available
@@ -300,31 +302,11 @@ class CommandProcessor:
             return SkillResult(True, "", {"command_type": "chat_interrupted"})
         finally:
             self._chat_task = None
-        if groq_candidate and turn.kind == 'action':
-            # Separate candidate path, not ACTION eligibility or router re-entry.
-            # Only audited executor branches which ALWAYS preview exact args
-            # and ask the existing correlated confirmation may be reached.
-            from core.command_intent import validate_intent, InvalidIntent
-            try:
-                intent = validate_intent({'tool': turn.intent.tool, 'arguments': turn.intent.arguments})
-            except (InvalidIntent, AttributeError, TypeError):
-                return SkillResult(True, 'Не вдалося перевірити дію. Уточніть повне прохання.',
-                                   {'command_type': 'intent_clarification'})
-            if intent.tool not in {'open_app', 'find_files', 'weather', 'web_search'}:
-                return SkillResult(True, 'Для цієї дії введіть прохання текстом. Нічого не виконано.',
-                                   {'command_type': 'intent_clarification'})
-            decision = DialogueDecision(DecisionKind.ACTION_CANDIDATE, intent=intent,
-                                        turn_id=input_turn.turn_id)
-            permission = natural_action_permission(decision,
-                prior_clarification['request'] if scoped_name else candidate_text,
-                candidate_text, prior_clarification if scoped_name else None, bool(scoped_name))
-            if permission.outcome is not PolicyOutcome.ALLOW:
-                return SkillResult(True, permission.response, {'command_type': 'intent_clarification'})
+        if groq_candidate and turn.kind in {'action', 'lookup'}:
             context = CommandContext(self.settings, self.services, confirm, source,
                 raw_text=candidate_text, normalized_text=self._normalize(candidate_text), turn_id=input_turn.turn_id)
-            result = await asyncio.wait_for(execute_intent(permission.intent, context), timeout=120)
-            result.data['natural_action'] = True
-            return result
+            return await self._groq_candidate_action(turn, candidate_text, prior_clarification, scoped_name,
+                                                     previous_reply, context)
         missing_app_name = bool(re.search(r'\b(?:відкрити|відкрий|запустити|запусти)\s+(?:мені\s+)?програму[.!?\s]*$', candidate_text, re.I))
         if (groq_candidate and request_scope(candidate_text) == 'open_app'
                 and (turn.kind == 'clarify' or (turn.kind == 'chat' and missing_app_name))):
@@ -673,6 +655,9 @@ class CommandProcessor:
                     turn.intent.tool if turn.intent is not None else None, scoped)
         if turn.kind == "action":
             return await self._natural_action(turn, request, text, pending, scoped, context, assistant_offer)
+        if turn.kind == "lookup":
+            self._reply_interrupted = False
+            return await self._run_permission(knowledge_gap_permission(turn, text), context)
         if turn.kind == 'unavailable' and spoken:
             # Preserve partial speech, surface failure, and never rewrite older history.
             await emit([turn.response])
@@ -790,16 +775,51 @@ class CommandProcessor:
         self._reply_interrupted = False
         permission = natural_action_permission(turn, request, text, pending, scoped,
                                                assistant_offer=assistant_offer)
+        permission = knowledge_gap_fallback(permission, turn, request, text, scoped)
+        result = await self._run_permission(permission, context)
+        self._reply_interrupted = False
+        return result
+
+    async def _run_permission(self, permission, context):
+        """Shared ALLOW/refusal handling; the executor still previews and confirms."""
         if permission.outcome is not PolicyOutcome.ALLOW:
             return SkillResult(True, permission.response,
                                {"command_type": "intent_clarification", "success": False})
-        intent = permission.intent
-        result = await asyncio.wait_for(execute_intent(intent, context), timeout=120)
+        if permission.route == "knowledge_gap":
+            # Honest notice before the executor's exact-query confirmation.
+            await self.speaker.say(KNOWLEDGE_GAP_NOTICE)
+        result = await asyncio.wait_for(execute_intent(permission.intent, context), timeout=120)
         result.data["natural_action"] = True
         if permission.route != "direct":
             result.data["intent_route"] = permission.route
-        self._reply_interrupted = False
         return result
+
+    async def _groq_candidate_action(self, turn, candidate_text, prior_clarification, scoped_name,
+                                     previous_reply, context):
+        """Unscored Groq voice: separate candidate path, not ACTION eligibility or router re-entry.
+
+        Only audited executor branches which ALWAYS preview exact args and ask
+        the existing correlated confirmation may be reached.
+        """
+        from core.command_intent import validate_intent, InvalidIntent
+        try:
+            intent = validate_intent({'tool': turn.intent.tool, 'arguments': turn.intent.arguments})
+        except (InvalidIntent, AttributeError, TypeError):
+            return SkillResult(True, 'Не вдалося перевірити дію. Уточніть повне прохання.',
+                               {'command_type': 'intent_clarification'})
+        if intent.tool not in {'open_app', 'find_files', 'weather', 'web_search'}:
+            return SkillResult(True, 'Для цієї дії введіть прохання текстом. Нічого не виконано.',
+                               {'command_type': 'intent_clarification'})
+        kind = DecisionKind.KNOWLEDGE_GAP if turn.kind == 'lookup' else DecisionKind.ACTION_CANDIDATE
+        decision = DialogueDecision(kind, intent=intent, turn_id=context.turn_id)
+        if kind is DecisionKind.KNOWLEDGE_GAP:
+            return await self._run_permission(knowledge_gap_permission(decision, candidate_text), context)
+        # A conversational lead-in must not hide the direct request (J131).
+        request = prior_clarification['request'] if scoped_name else final_request(candidate_text)
+        permission = natural_action_permission(decision, request, candidate_text,
+            prior_clarification if scoped_name else None, bool(scoped_name), assistant_offer=previous_reply)
+        permission = knowledge_gap_fallback(permission, decision, request, candidate_text, bool(scoped_name))
+        return await self._run_permission(permission, context)
 
     def _natural_answer(self, turn, spoken):
         """Final CHAT/CLARIFY text: spoken parts win; local-action claims are rewritten."""

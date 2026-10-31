@@ -3,8 +3,11 @@ import json
 import unittest
 from pathlib import Path
 
+from core.action_policy import PolicyOutcome, knowledge_gap_permission
 from core.action_proposal import needs_proposal
+from core.command_intent import CommandIntent
 from core.confirmation import ConfirmationService
+from core.dialogue_decision import DecisionKind, DialogueDecision
 from core.natural_turn import (application_name_reply, direct_request, final_request, request_scope,
                                short_clarification, voice_request, window_request)
 from core.processor import COMMAND_PREFIX, DIALOGUE_CONTROLS, STOP_SPEECH, CommandProcessor
@@ -13,7 +16,7 @@ from skills.memory.personal import parse_request
 
 CORPUS = Path(__file__).resolve().parents[1] / "testing" / "phrase_corpus.json"
 REQUIRED_CATEGORIES = {"stop", "dialogue_control", "confirmation", "memory", "action_request",
-                       "window", "non_action", "bare_reference", "scoped_reply", "command_mode"}
+                       "window", "non_action", "bare_reference", "scoped_reply", "command_mode", "knowledge_gap"}
 DECISION = {True: "yes", False: "no", None: "unknown"}
 
 
@@ -33,6 +36,10 @@ def _memory(phrase):
     return list(parsed) if parsed is not None else None
 
 
+# The model-worded query is fixed: the corpus checks the local policy on the user text.
+_LOOKUP = DialogueDecision(DecisionKind.KNOWLEDGE_GAP,
+                           intent=CommandIntent("web_search", {"query": "тема"}))
+
 FIELDS = {
     "command_prefix": lambda p: bool(COMMAND_PREFIX.match(p["text"])),
     "stop": lambda p: bool(STOP_SPEECH.fullmatch(p["text"])),
@@ -47,6 +54,7 @@ FIELDS = {
     "confirm_voice_low": lambda p: DECISION[ConfirmationService._decision(p["text"], 0.7)],
     "memory": _memory,
     "query": lambda p: search_query(_request(p)),
+    "knowledge_gap": lambda p: knowledge_gap_permission(_LOOKUP, p["text"]).outcome is PolicyOutcome.ALLOW,
 }
 
 

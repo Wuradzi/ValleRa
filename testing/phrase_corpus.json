@@ -13,7 +13,8 @@
     "confirm": "ConfirmationService._decision(text): yes/no/unknown (UI/текст, без confidence)",
     "confirm_voice_low": "те саме з голосовою confidence 0.7: так → unknown, ні → no",
     "memory": "parse_request(text): [операція, вміст] або null",
-    "query": "search_query(final_request(request)): слова користувача для вебпошуку"
+    "query": "search_query(final_request(request)): слова користувача для вебпошуку",
+    "knowledge_gap": "knowledge_gap_permission(text): чи може незнання моделі перейти в запропонований вебпошук (лише web_search, далі підтвердження)"
   },
   "phrases": [
     {"id": "stop_plain", "category": "stop", "source": "voice", "text": "стоп", "expect": {"stop": true, "direct": false}},
@@ -64,6 +65,14 @@
     {"id": "lead_in_greeting", "category": "action_request", "source": "voice", "text": "Привіт. Відкрий браузер.", "expect": {"direct": true, "scope": "open_app"}},
     {"id": "search_info_phrase", "category": "action_request", "source": "voice", "text": "Знайди інформацію про ресорджменту.", "expect": {"direct": true, "query": "ресорджменту"}, "note": "Без «інформацію про» і крапки; написання STT не виправляється моделлю."},
     {"id": "search_plain_words", "category": "action_request", "source": "voice", "text": "Знайди рецепт без цукру", "expect": {"query": "рецепт без цукру"}},
+
+    {"id": "gap_tell_me", "category": "knowledge_gap", "source": "voice", "text": "Розкажи мені коротко про реставрацію Майджі.", "expect": {"direct": false, "knowledge_gap": true}, "note": "Жива сесія 31.10.2026: раніше «Не впевнений, що це пряме прохання»."},
+    {"id": "gap_question", "category": "knowledge_gap", "source": "voice", "text": "Хто такий Гарібальді?", "expect": {"knowledge_gap": true}},
+    {"id": "gap_refused", "category": "knowledge_gap", "source": "voice", "text": "Не шукай в інтернеті, що таке Мейдзі?", "expect": {"knowledge_gap": false}, "note": "Відмова від пошуку блокує маршрут."},
+    {"id": "gap_without_internet", "category": "knowledge_gap", "source": "text", "text": "Розкажи без пошуку, хто такий Гарібальді", "expect": {"knowledge_gap": false}},
+    {"id": "gap_statement", "category": "knowledge_gap", "source": "voice", "text": "Я вчора шукав рецепт борщу", "expect": {"knowledge_gap": false}, "note": "Оповідь, не інформаційний запит."},
+    {"id": "gap_secret", "category": "knowledge_gap", "source": "voice", "text": "Що за пароль 1234 у мене був?", "expect": {"knowledge_gap": false}, "note": "Секрети не йдуть в інтернет."},
+    {"id": "gap_bare_yes", "category": "knowledge_gap", "source": "voice", "text": "Так", "expect": {"knowledge_gap": false}},
 
     {"id": "window_maximize", "category": "window", "source": "voice", "text": "Розгорни вікно Telegram", "expect": {"direct": true, "scope": "window_control", "window": ["maximize", "Telegram"]}},
     {"id": "window_minimize_bare", "category": "window", "source": "voice", "text": "Згорни", "expect": {"window": ["minimize", ""]}},
