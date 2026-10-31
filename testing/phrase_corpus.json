@@ -14,7 +14,9 @@
     "confirm_voice_low": "те саме з голосовою confidence 0.7: так → unknown, ні → no",
     "memory": "parse_request(text): [операція, вміст] або null",
     "query": "search_query(final_request(request)): слова користувача для вебпошуку",
-    "knowledge_gap": "knowledge_gap_permission(text): чи може незнання моделі перейти в запропонований вебпошук (лише web_search, далі підтвердження)"
+    "knowledge_gap": "knowledge_gap_permission(text): чи може незнання моделі перейти в запропонований вебпошук (лише web_search, далі підтвердження)",
+    "knowledge_base": "parse_knowledge_request(text): [операція, тема, текст] або null (фрази локальної бази знань)",
+    "knowledge_source": "KNOWLEDGE_SOURCE_QUESTION: питання «Звідки ти це знаєш?»"
   },
   "phrases": [
     {"id": "stop_plain", "category": "stop", "source": "voice", "text": "стоп", "expect": {"stop": true, "direct": false}},
@@ -73,6 +75,18 @@
     {"id": "gap_statement", "category": "knowledge_gap", "source": "voice", "text": "Я вчора шукав рецепт борщу", "expect": {"knowledge_gap": false}, "note": "Оповідь, не інформаційний запит."},
     {"id": "gap_secret", "category": "knowledge_gap", "source": "voice", "text": "Що за пароль 1234 у мене був?", "expect": {"knowledge_gap": false}, "note": "Секрети не йдуть в інтернет."},
     {"id": "gap_bare_yes", "category": "knowledge_gap", "source": "voice", "text": "Так", "expect": {"knowledge_gap": false}},
+
+    {"id": "kb_add", "category": "knowledge_base", "source": "voice", "text": "Додай у базу знань: Кафедра: корпус 7, аудиторія 412.", "expect": {"knowledge_base": ["add", "Кафедра", "корпус 7, аудиторія 412"], "memory": null}},
+    {"id": "kb_add_as_reference", "category": "knowledge_base", "source": "text", "text": "Запам'ятай як довідку: Wi-Fi у бібліотеці: мережа LNTU", "expect": {"knowledge_base": ["add", "Wi-Fi у бібліотеці", "мережа LNTU"]}, "note": "Фраза бази знань, не особиста пам'ять; processor перевіряє її першою."},
+    {"id": "kb_list", "category": "knowledge_base", "source": "voice", "text": "Що є в базі знань?", "expect": {"knowledge_base": ["list", "", ""]}},
+    {"id": "kb_forget", "category": "knowledge_base", "source": "voice", "text": "Забудь довідку про кафедру", "expect": {"knowledge_base": ["forget", "кафедру", ""]}},
+    {"id": "kb_clear", "category": "knowledge_base", "source": "voice", "text": "Очисти базу знань", "expect": {"knowledge_base": ["clear", "", ""]}},
+    {"id": "kb_not_memory", "category": "knowledge_base", "source": "voice", "text": "Запам'ятай проєкт: Рейвен", "expect": {"knowledge_base": null, "memory": ["remember", "проєкт: Рейвен"]}, "note": "Особиста пам'ять не перехоплюється базою знань."},
+    {"id": "kb_reported_speech", "category": "knowledge_base", "source": "voice", "text": "Він сказав додай у базу знань", "expect": {"knowledge_base": null}},
+    {"id": "kb_sql_question", "category": "knowledge_base", "source": "voice", "text": "Розкажи про базу знань у SQL", "expect": {"knowledge_base": null}},
+    {"id": "kb_source_question", "category": "knowledge_base", "source": "voice", "text": "Звідки ти це знаєш?", "expect": {"knowledge_source": true, "knowledge_base": null}},
+    {"id": "kb_source_short", "category": "knowledge_base", "source": "voice", "text": "Яке джерело?", "expect": {"knowledge_source": true}},
+    {"id": "kb_source_unrelated", "category": "knowledge_base", "source": "voice", "text": "Звідки родом Гарібальді?", "expect": {"knowledge_source": false}},
 
     {"id": "window_maximize", "category": "window", "source": "voice", "text": "Розгорни вікно Telegram", "expect": {"direct": true, "scope": "window_control", "window": ["maximize", "Telegram"]}},
     {"id": "window_minimize_bare", "category": "window", "source": "voice", "text": "Згорни", "expect": {"window": ["minimize", ""]}},

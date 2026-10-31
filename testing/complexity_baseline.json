@@ -18,7 +18,7 @@
     "core/listen.py::VoskListener.listen_once": 14,
     "core/natural_turn.py::TurnDecoder.finish": 13,
     "core/processor.py::CommandProcessor._restricted_turn": 16,
-    "core/processor.py::CommandProcessor.process": 21,
+    "core/processor.py::CommandProcessor.process": 17,
     "core/speak.py::Speaker._speak_with_output": 11,
     "core/stt_listener.py::SpeechListener._recognize_capture": 15,
     "core/web_ui.py::LocalWebUI._api": 14,

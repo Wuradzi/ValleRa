@@ -30,6 +30,7 @@ from services.diagnostics import DiagnosticsService
 from services.files.file_service import FileService
 from services.llm.manager import LLMManager
 from services.pentest import PentestService
+from services.storage.knowledge_store import KnowledgeStore
 from services.storage.memory_store import MemoryStore
 from services.storage.notes_store import NotesStore
 from services.storage.reminder_store import ReminderStore
@@ -77,6 +78,7 @@ class RavenApp:
             self._mic_ready.set()
 
         memory = MemoryStore(settings.paths.data_dir / "memory.json")
+        knowledge = KnowledgeStore(settings.paths.data_dir / "knowledge_base.json")
         notes = NotesStore(settings.paths.data_dir / "notes.json")
         reminders = ReminderStore(settings.paths.data_dir / "reminders.json")
         pentest = PentestService(
@@ -94,6 +96,7 @@ class RavenApp:
         )
         services = {
             "memory": memory,
+            "knowledge": knowledge,
             "secrets": secret_store,
             "notes": notes,
             "reminders": reminders,

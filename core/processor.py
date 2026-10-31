@@ -67,6 +67,20 @@ LOCAL_ACTION_TYPES = {
 OPEN_ACTION_TYPES = {"open_browser", "open_application", "file_open", "agent_workplace"}
 STOP_SPEECH = re.compile(r"^(?:команда\s*[:,]?\s*)?(?:стоп|замовкни|зупини озвучення)[.!?]*$", re.I)
 WEB_CORRECTION = re.compile(r"^(?:це не те|не те|ти не те знайшов|не те знайшов)[.!?]*$", re.I)
+KNOWLEDGE_SOURCE_QUESTION = re.compile(
+    r"(?:а\s+)?(?:звідки\s+(?:ти\s+)?(?:це\s+)?знаєш|звідки\s+це|яке\s+(?:в\s+тебе\s+)?джерело|"
+    r"з\s+якого\s+джерела(?:\s+це)?)[?.!]*", re.I)
+
+
+def _knowledge_source_label(entry):
+    added = entry.get('added_at', '')[:10]
+    date = '.'.join(reversed(added.split('-'))) if added else 'дата невідома'
+    source = entry.get('source', {})
+    if source.get('kind') == 'manual':
+        return f'додано вами {date}'
+    return f"файл «{source.get('name', 'невідомий')}», {date}"
+
+
 PAUSE_CONVERSATION = re.compile(r"^(?:зачекай|пауза|постав розмову на паузу)[.!?]*$", re.I)
 DIALOGUE_CONTROLS = {
     "продовжуй": "continue", "продовжимо": "continue", "продовж розмову": "continue",
@@ -96,6 +110,7 @@ class CommandProcessor:
         self._reply_interrupted = False
         self._reply_truncated = False
         self._natural_pending = None
+        self._last_knowledge_ids = []
         from core.document_reading import DocumentReading
         self.documents = DocumentReading()
 
@@ -149,27 +164,8 @@ class CommandProcessor:
                 if self.services.get('tasks') is not None:
                     self.services['tasks'].clear()
                 return result
-        from skills.memory.personal import parse_request, handle_request
-        memory_text = COMMAND_PREFIX.sub(r'\1', raw_text) if COMMAND_PREFIX.match(raw_text) else raw_text
-        memory_request = parse_request(memory_text) if mode == 'chat' else None
-        if memory_request and 'memory' in self.services.get('enabled_skills', set()):
-            if not gate.explicit_local_request:
-                return SkillResult(True, 'Повторіть запит пам’яті повністю або введіть його текстом.')
-            context = CommandContext(self.settings, self.services, confirm, source, raw_text=memory_text,
-                                     turn_id=input_turn.turn_id if input_turn else None)
-            try:
-                result = await handle_request(memory_request, context, self.llm_manager)
-            except OSError:
-                logger.exception('Memory storage operation failed')
-                return SkillResult(True, 'Не вдалося завершити зміну пам’яті. Перевірте сховище.')
-            if result.data.get('memory_context_reset'):
-                self.documents.clear()
-                self._natural_pending = None
-                self.dialogue_state.proposals.clear()
-                self._last_question = ''
-                self._cache_reply('')
-                if self.services.get('web_answers') is not None:
-                    self.services['web_answers'].clear()
+        result = await self._memory_turn(raw_text, gate, mode, source, confirm, input_turn)
+        if result is not None:
             return result
         proposals = self.dialogue_state.proposals
         session_id = input_turn.session_id if input_turn is not None else proposals.session_id
@@ -238,6 +234,88 @@ class CommandProcessor:
 
         return self._finish_turn(result, provider, success, raw_text, local_raw, source, started, state)
 
+    async def _memory_turn(self, raw_text, gate, mode, source, confirm, input_turn):
+        """Explicit personal-memory or knowledge-base phrases; None for every other turn."""
+        if mode != 'chat' or 'memory' not in self.services.get('enabled_skills', set()):
+            return None
+        from skills.memory.knowledge import parse_knowledge_request
+        from skills.memory.personal import parse_request
+        memory_text = COMMAND_PREFIX.sub(r'\1', raw_text) if COMMAND_PREFIX.match(raw_text) else raw_text
+        source_reply = self._knowledge_source_reply(memory_text)
+        if source_reply is not None:
+            return source_reply  # read-only answer from stored entries, no model
+        # Knowledge phrases first: «Запам'ятай як довідку» must not become a personal fact.
+        knowledge_request = (parse_knowledge_request(memory_text)
+                             if self.services.get('knowledge') is not None else None)
+        memory_request = None if knowledge_request else parse_request(memory_text)
+        if knowledge_request is None and memory_request is None:
+            return None
+        if not gate.explicit_local_request:
+            return SkillResult(True, 'Повторіть запит пам’яті повністю або введіть його текстом.')
+        context = CommandContext(self.settings, self.services, confirm, source, raw_text=memory_text,
+                                 turn_id=input_turn.turn_id if input_turn else None)
+        if knowledge_request is not None:
+            return await self._knowledge_turn(knowledge_request, context)
+        return await self._personal_memory_turn(memory_request, context)
+
+    async def _knowledge_turn(self, request, context):
+        from skills.memory.knowledge import handle_knowledge_request
+        try:
+            return await handle_knowledge_request(request, context)
+        except OSError:
+            logger.exception('Knowledge storage operation failed')
+            return SkillResult(True, 'Не вдалося завершити зміну бази знань. Перевірте сховище.')
+
+    async def _personal_memory_turn(self, memory_request, context):
+        from skills.memory.personal import handle_request
+        try:
+            result = await handle_request(memory_request, context, self.llm_manager)
+        except OSError:
+            logger.exception('Memory storage operation failed')
+            return SkillResult(True, 'Не вдалося завершити зміну пам’яті. Перевірте сховище.')
+        if result.data.get('memory_context_reset'):
+            self.documents.clear()
+            self._natural_pending = None
+            self.dialogue_state.proposals.clear()
+            self._last_question = ''
+            self._cache_reply('')
+            if self.services.get('web_answers') is not None:
+                self.services['web_answers'].clear()
+        return result
+
+    def _knowledge_source_reply(self, text):
+        """«Звідки ти це знаєш?» about entries used in the last reply; None otherwise."""
+        if not KNOWLEDGE_SOURCE_QUESTION.fullmatch(text.strip()):
+            return None
+        store = self.services.get('knowledge')
+        ids = getattr(self, '_last_knowledge_ids', [])
+        entries = store.get(ids) if store is not None and ids else []
+        if not entries:
+            return None  # the model answers about web or its own knowledge
+        sources = '; '.join(f"«{entry['title']}» — {_knowledge_source_label(entry)}" for entry in entries)
+        return SkillResult(True, 'З локальної бази знань: ' + sources + '.', {'command_type': 'knowledge_source'})
+
+    def _knowledge_options(self, text):
+        """Matching reference entries for conversation; never for an action request."""
+        store = self.services.get('knowledge')
+        self._last_knowledge_ids = []
+        if store is None or 'memory' not in self.services.get('enabled_skills', set()) or direct_request(text, ''):
+            return {}
+        try:
+            entries = store.search(text)
+        except OSError:
+            logger.exception('Knowledge search failed')
+            return {}
+        # Imported files reach a cloud model only with separate consent (phase 2).
+        entries = [entry for entry in entries if entry.get('source', {}).get('kind') == 'manual']
+        self._last_knowledge_ids = [entry['id'] for entry in entries]
+        if not entries:
+            return {}
+        logger.info('Knowledge context entries=%d ids=%s', len(entries), ','.join(self._last_knowledge_ids))
+        # Source and date stay local: the model must not volunteer them.
+        return {'knowledge_context': [{'id': entry['id'], 'title': entry['title'], 'text': entry['text']}
+                                      for entry in entries]}
+
     async def _restricted_turn(self, raw_text, normalized, input_turn, gate, mode, source, confirm):
         """Turn that failed the pre-routing gate: tool-free reply or scoped Groq candidate."""
         # STT continuation is context, never authority for a tool or a pending
@@ -290,6 +368,7 @@ class CommandProcessor:
                 enabled_skills=self.services.get("enabled_skills", set()),
                 web_context=web.dialogue_context() if web is not None else None,
                 **self._document_options(model_text),
+                **self._knowledge_options(model_text),
                 **({'on_chunk': speak_preview} if groq_candidate else {}))
 
         task = asyncio.create_task(propose())
@@ -470,6 +549,7 @@ class CommandProcessor:
             on_chunk=on_chunk,
             **web_options,
             **self._document_options(raw_text),
+            **self._knowledge_options(raw_text),
         ))
         self._chat_task = chat_task
         try:
@@ -631,6 +711,7 @@ class CommandProcessor:
             model_text, self.services["memory"].relevant(normalized),
             enabled_skills=self.services.get("enabled_skills", set()), web_context=web_context,
             **self._document_options(model_text),
+            **self._knowledge_options(model_text),
             on_chunk=on_chunk, **proposal_options))
         self._chat_task = task
         try:

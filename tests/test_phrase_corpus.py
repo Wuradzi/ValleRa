@@ -10,13 +10,15 @@ from core.confirmation import ConfirmationService
 from core.dialogue_decision import DecisionKind, DialogueDecision
 from core.natural_turn import (application_name_reply, direct_request, final_request, request_scope,
                                short_clarification, voice_request, window_request)
-from core.processor import COMMAND_PREFIX, DIALOGUE_CONTROLS, STOP_SPEECH, CommandProcessor
+from core.processor import (COMMAND_PREFIX, DIALOGUE_CONTROLS, KNOWLEDGE_SOURCE_QUESTION, STOP_SPEECH,
+                            CommandProcessor)
 from services.web.intents import search_query
+from skills.memory.knowledge import parse_knowledge_request
 from skills.memory.personal import parse_request
 
 CORPUS = Path(__file__).resolve().parents[1] / "testing" / "phrase_corpus.json"
 REQUIRED_CATEGORIES = {"stop", "dialogue_control", "confirmation", "memory", "action_request",
-                       "window", "non_action", "bare_reference", "scoped_reply", "command_mode", "knowledge_gap"}
+                       "window", "non_action", "bare_reference", "scoped_reply", "command_mode", "knowledge_gap", "knowledge_base"}
 DECISION = {True: "yes", False: "no", None: "unknown"}
 
 
@@ -29,6 +31,11 @@ def _request(phrase):
 def _window(phrase):
     window = window_request(_request(phrase))
     return list(window) if window is not None else None
+
+
+def _knowledge_base(phrase):
+    parsed = parse_knowledge_request(phrase["text"])
+    return list(parsed) if parsed is not None else None
 
 
 def _memory(phrase):
@@ -55,6 +62,8 @@ FIELDS = {
     "memory": _memory,
     "query": lambda p: search_query(_request(p)),
     "knowledge_gap": lambda p: knowledge_gap_permission(_LOOKUP, p["text"]).outcome is PolicyOutcome.ALLOW,
+    "knowledge_base": _knowledge_base,
+    "knowledge_source": lambda p: bool(KNOWLEDGE_SOURCE_QUESTION.fullmatch(p["text"].strip())),
 }
 
 

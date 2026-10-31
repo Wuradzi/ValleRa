@@ -37,7 +37,7 @@ GROUPS = {
         "interaction", "router", "skill_loader", "command_intent", "task_context", "phrase_corpus", "dialogue_context", "knowledge_gap")),
     "files": ("Файли та вибір результату", ("task_context",)),
     "storage": ("Пам'ять, нагадування та сховище", (
-        "atomic_json", "memory_store", "reminder_store", "secret_store")),
+        "atomic_json", "memory_store", "reminder_store", "secret_store", "knowledge_base")),
     "security": ("Секрети та обмеження виконання", (
         "security", "secret_store", "single_instance", "command_intent", "task_context")),
     "web": ("Пошук і погода — тестові відповіді", ("web_voice",)),
