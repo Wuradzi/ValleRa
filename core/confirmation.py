@@ -178,13 +178,23 @@ class ConfirmationService:
         await self.speak("Час підтвердження минув. Операцію скасовано." if outcome == "timeout"
                          else "Операцію скасовано.")
 
+    @staticmethod
+    def _normalized_reply(answer: str) -> str:
+        normalized = " ".join(
+            re.sub(r"[^0-9a-zа-яіїєґ'’\s]", " ", answer.lower()).split()
+        )
+        words = normalized.split()
+        # Only identical single-word repetitions; never discard a negation,
+        # an unknown word or a different answer from mixed speech.
+        if words and len(set(words)) == 1:
+            return words[0]
+        return normalized
+
     @classmethod
     def _decision(cls, answer: str, confidence: float | None = None) -> bool | None:
         if confidence is not None and (not math.isfinite(confidence) or not 0 <= confidence <= 1):
             return None
-        normalized = " ".join(
-            re.sub(r"[^0-9a-zа-яіїєґ'’\s]", " ", answer.lower()).split()
-        )
+        normalized = cls._normalized_reply(answer)
         if normalized in cls.REJECTED:
             return False if confidence is None or confidence >= cls.VOICE_DENY_MIN_CONFIDENCE else None
         if normalized in cls.ACCEPTED:

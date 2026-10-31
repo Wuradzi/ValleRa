@@ -196,6 +196,8 @@ class WebAnswerService:
             "coverage": result.data.get("coverage", {"status": "unassessed", "missing": []}),
             "caveat": result.data.get("caveat", "")[:600],
             "sources_read": result.data.get("sources_read", 0),
+            "source_titles": [str(item.get("title", ""))[:200]
+                              for item in result.data.get("web_results", [])[:5]],
             "failure_reason": (result.data.get("summary_failure") or result.data.get("search_failure")
                                or next(iter(result.data.get("page_reading", {}).get("failures", [])), "")),
         }
@@ -437,6 +439,7 @@ class WebAnswerService:
             data["summary_failure"] = exc.code
             return self._remember(SkillResult(True, "Сторінки прочитано, але модель повернула підсумок у непридатному форматі. Посилання на джерела — в консолі.", data))
         data["coverage"] = summary["coverage"]
+        data["caveat"] = summary["caveat"]
         if not summary["claims"]:
             logger.info("Web summary has no supported claims sources=%d", len(sources))
             data["summary_failure"] = "insufficient_evidence"

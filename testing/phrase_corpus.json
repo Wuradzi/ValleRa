@@ -29,6 +29,9 @@
     {"id": "control_not_question", "category": "dialogue_control", "source": "voice", "text": "Повтори, будь ласка, що таке SSD", "expect": {"control": null, "direct": true, "scope": null}, "note": "Спостереження 30.10.2026: «повтори» входить у прямі дієслова заради workplace_retry, тому загальний gate (tool='') пропускає фразу; локальний scope=null, інструмент не визначено. Не змінено без рішення користувача."},
 
     {"id": "confirm_yes", "category": "confirmation", "source": "voice", "text": "Так.", "expect": {"confirm": "yes", "confirm_voice_low": "unknown", "app_name": null}},
+    {"id": "confirm_yes_repeated", "category": "confirmation", "source": "voice", "text": "Так! Так!", "expect": {"confirm": "yes", "confirm_voice_low": "unknown"}, "note": "Повтор одного слова нормалізується; confidence gate збережено."},
+    {"id": "confirm_no_repeated", "category": "confirmation", "source": "voice", "text": "Ні, ні!", "expect": {"confirm": "no", "confirm_voice_low": "no"}, "note": "Повтор одного заперечення є відмовою."},
+    {"id": "confirm_mixed_repeated", "category": "confirmation", "source": "voice", "text": "Так, так, ні", "expect": {"confirm": "unknown", "confirm_voice_low": "unknown"}, "note": "Змішану згоду та відмову не спрощувати."},
     {"id": "confirm_yes_full", "category": "confirmation", "source": "voice", "text": "Так, підтверджую", "expect": {"confirm": "yes"}},
     {"id": "confirm_ok", "category": "confirmation", "source": "text", "text": "гаразд", "expect": {"confirm": "yes", "app_name": null}},
     {"id": "confirm_no", "category": "confirmation", "source": "voice", "text": "Ні", "expect": {"confirm": "no", "confirm_voice_low": "no", "app_name": null}},

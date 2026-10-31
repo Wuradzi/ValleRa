@@ -18,6 +18,38 @@ from tests.platform_fixtures import windows_shell_platform
 
 
 class ConfirmationServiceTests(unittest.IsolatedAsyncioTestCase):
+    def test_identical_repetitions_preserve_decision_and_confidence(self):
+        for text in ('Так! Так!', 'гаразд гаразд', 'підтверджую підтверджую'):
+            self.assertIs(ConfirmationService._decision(text, .8), True)
+            self.assertIs(ConfirmationService._decision(text), True)
+            self.assertIsNone(ConfirmationService._decision(text, .79))
+        for text in ('Ні, ні!', 'відміна відміна', 'скасуй скасуй'):
+            self.assertIs(ConfirmationService._decision(text, .5), False)
+            self.assertIsNone(ConfirmationService._decision(text, .49))
+        for text in ('так так ні', 'ні так', 'так гаразд', 'так невідоме так',
+                     'не так так', 'можливо можливо', '', '!!!'):
+            self.assertIsNone(ConfirmationService._decision(text))
+        for score in (float('nan'), float('inf'), -1, 1.1):
+            self.assertIsNone(ConfirmationService._decision('так так', score))
+
+    async def test_repeated_reply_requires_current_request_and_mixed_reply_waits(self):
+        for reply, expected in [('так так', True), ('ні ні', False)]:
+            service = ConfirmationService(AsyncMock(), timeout_seconds=1)
+            task = asyncio.create_task(service.ask('fixture'))
+            try:
+                await service.wait_until_requested()
+                self.assertFalse(service.submit(reply, 'stale', confidence=.95))
+                self.assertFalse(service.submit(reply, confidence=.95))
+                self.assertTrue(service.submit('так ні', service.request_id, confidence=.95))
+                await asyncio.wait_for(service.wait_until_response_processed(), .5)
+                self.assertFalse(task.done())
+                self.assertIn('Не розібрав', service.speak.await_args.args[0])
+                self.assertTrue(service.submit(reply, service.request_id, confidence=.95))
+                self.assertIs(await asyncio.wait_for(task, .5), expected)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     async def test_cloud_exact_confirmation_and_stale_reply(self):
         from core.models import RecognitionResult
         from dataclasses import replace
